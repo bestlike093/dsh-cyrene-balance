@@ -101,7 +101,28 @@ balance_set_view(view="today")          # 以后默认只报今日额度
 
 ## 相关：带立绘的 DSH 桌宠
 
-本插件只做余额查询与提醒，本身没有界面。如果你希望在 DeepSeek Harness 里也有透明立绘、气泡台词和状态面板，可以另外安装 `dsh-cyrene-pet`，两个插件可以同时使用。
+本插件只做余额查询与提醒，本身没有界面。想要立绘和桌面交互，可以另装 `dsh-cyrene-pet`，两个插件能同时跑，各管各的。
+
+`dsh-cyrene-pet` 是独立的 DSH 插件：宿主半跑在 dsh 里，渲染半是一个 Electron 进程，复用 dsh 自带的 Electron，不额外下载运行时。它目前实际提供这些能力：
+
+| 能力 | 说明 |
+| --- | --- |
+| Live2D 立绘 | 透明无边框置顶窗口，12 个表情、5 组动作，自动眨眼与呼吸，视线跟随鼠标 |
+| 桌面交互 | 拖拽移动、松手贴边、窗口位置与缩放记忆、非立绘区域点击穿透 |
+| 气泡台词 | 台词轮换、说话时口型动画；四种气泡模式：台词与余额交替 / 只看余额 / 只看台词 / 只看今日消费 |
+| 状态面板 | CPU / 内存 / GPU / 网速 / 电量 / 余额，三档详细度，可折叠 |
+| 提问接管 | 对话里的 `ask_user_question` 可由桌宠逐题问，支持 `pet-all` / `pet-single` / `both` / `web` 四种模式 |
+| 风险审批 | `approval/request` 在桌宠里选「允许一次 / 拒绝」 |
+| 任务进程 | 读 dsh 的 `todos` 投影，长按立绘播报当前进度 |
+| 设置与菜单 | 右键菜单、托盘菜单、设置浮层；dsh 设置页有启动 / 重启 / 关闭卡片 |
+
+安装：
+
+```bash
+dsh plugin --profile desktop add <解压后的 dsh-cyrene-pet 目录>
+```
+
+装好后重启 dsh。首次启动会在 `~/.dsh/storages/cyrene-pet/runtime/` 下部署桌宠运行时，之后改 `pet/` 里的代码只需要重启桌宠进程。
 
 - 安装包：**dsh-cyrene-pet-1.0.0.zip**
 - 夸克网盘：[https://pan.quark.cn/s/0f1c821ace8a](https://pan.quark.cn/s/0f1c821ace8a)

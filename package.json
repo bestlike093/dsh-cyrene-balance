@@ -1,0 +1,28 @@
+{
+  "name": "dsh-cyrene-balance",
+  "version": "1.0.0",
+  "description": "在 DeepSeek Harness 里查询 DeepSeek API 余额与今日消费，支持今日额度上限、超限提醒与只看今日额度 / 只看余额两种视图。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "balance"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data:; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'" />
+  <title>昔涟 · 桌宠</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="stage"></canvas>
+
+  <div id="bubble" class="bubble">
+    <img id="bubble-emoji" class="bubble-emoji" src="../assets/emoji/HI.png" alt="" />
+    <span id="bubble-text"></span>
+  </div>
+
+  <div id="ask" class="ask hidden">
+    <p id="ask-head" class="ask-head">人家想问你一下</p>
+    <p id="ask-text" class="ask-text"></p>
+    <div id="ask-choices" class="ask-choices"></div>
+    <div class="ask-actions">
+      <button id="ask-skip" class="ask-skip hidden" type="button">跳过</button>
+      <span id="ask-tip" class="ask-tip hidden">可以多选</span>
+      <button id="ask-confirm" class="ask-confirm hidden" type="button" disabled>答好了♪</button>
+    </div>
+  </div>
+
+  <div id="approval" class="approval hidden">
+    <p class="approval-head">想请你批准一下</p>
+    <p id="approval-text" class="approval-text"></p>
+    <div class="approval-actions">
+      <button id="approval-reject" class="approval-reject" type="button">拒绝</button>
+      <button id="approval-allow" class="approval-allow" type="button">允许一次</button>
+    </div>
+  </div>
+
+  <section id="task-sheet" class="task-sheet hidden">
+    <header>
+      <strong>任务进程</strong>
+      <button id="task-close" title="收起">×</button>
+    </header>
+    <div id="task-list" class="task-list"></div>
+    <div id="task-todos" class="task-todos"></div>
+    <p id="task-note" class="task-note"></p>
+  </section>
+
+  <section id="hud" class="hud hidden">
+    <div class="hud-top">
+      <img id="hud-avatar" class="hud-avatar" src="../assets/calm.png" alt="" />
+      <div class="hud-name">
+        <strong id="hud-nickname">柒柒</strong>
+        <span id="hud-mood">在呢</span>
+      </div>
+      <button id="hud-toggle" class="hud-toggle" title="展开 / 收起">···</button>
+    </div>
+    <div id="hud-body" class="hud-body">
+      <div class="hud-compact" id="hud-compact">--</div>
+      <div class="hud-grid">
+        <div class="hud-metric"><span>CPU</span><b id="hud-cpu">--</b></div>
+        <div class="hud-metric"><span>内存</span><b id="hud-mem">--</b></div>
+        <div class="hud-metric"><span>GPU</span><b id="hud-gpu">--</b></div>
+      </div>
+      <div class="hud-line">
+        <span id="hud-net">↓ -- · ↑ --</span>
+        <span id="hud-bat">电量 --</span>
+      </div>
+      <div class="hud-money">
+        <span class="hud-money-main"><b id="hud-total">--</b><i>余额</i></span>
+        <span class="hud-money-side">
+          <em id="hud-delta">±0.00</em>
+          <em id="hud-spent">今日 --</em>
+        </span>
+      </div>
+      <div class="hud-chips">
+        <span class="hud-chip" id="hud-recharge">充值 --</span>
+        <span class="hud-chip" id="hud-rate">标准价</span>
+        <span class="hud-chip" id="hud-updated">--:--</span>
+      </div>
+      <div class="hud-quota">
+        <span>额度</span>
+        <i class="hud-quota-bar"><b id="hud-quota-fill"></b></i>
+        <em id="hud-quota-text">未设</em>
+      </div>
+    </div>
+  </section>
+
+  <div id="menu" class="menu hidden">
+    <button data-action="toggle-hud">状态面板</button>
+    <div class="menu-group">
+      <span>显示方式</span>
+      <button data-bubble="rotate">交替</button>
+      <button data-bubble="info">余额</button>
+      <button data-bubble="talk">台词</button>
+      <button data-bubble="today">今日</button>
+    </div>
+    <button data-action="say">说句话</button>
+    <button data-action="task">任务进程</button>
+    <button data-action="pose">换一个姿势</button>
+    <button data-action="refresh">刷新余额</button>
+    <button data-action="settings">设置</button>
+    <button data-action="hide">先藏起来</button>
+  </div>
+
+  <div id="settings" class="settings hidden">
+    <header>
+      <strong>桌宠设置</strong>
+      <button id="settings-close" title="关闭">×</button>
+    </header>
+
+    <div class="set-group">
+      <h4>形象与气泡</h4>
+      <label class="set-row"><span>昵称</span><input id="set-nickname" type="text" maxlength="24" /></label>
+      <label class="set-row"><span>缩放</span>
+        <select id="set-scale">
+          <option value="0.5">50%</option>
+          <option value="0.6">60%</option>
+          <option value="0.7">70%</option>
+          <option value="0.8">80%</option>
+          <option value="1">100%</option>
+          <option value="1.25">125%</option>
+          <option value="1.5">150%</option>
+          <option value="1.75">175%</option>
+        </select>
+      </label>
+      <label class="set-row"><span>气泡字号</span>
+        <select id="set-font">
+          <option value="12">小</option>
+          <option value="14.5">标准</option>
+          <option value="18">大</option>
+        </select>
+      </label>
+      <label class="set-row"><span>气泡形状</span>
+        <select id="set-bubble-radius">
+          <option value="0">直角</option>
+          <option value="10">圆角</option>
+          <option value="18">大圆角</option>
+        </select>
+      </label>
+      <label class="set-row"><span>气泡不透明度</span><input id="set-bubble-alpha" type="range" min="0.5" max="1" step="0.02" /></label>
+    </div>
+
+    <div class="set-group">
+      <h4>状态栏</h4>
+      <label class="set-row"><span>显示状态栏</span><input id="set-show-hud" type="checkbox" /></label>
+      <label class="set-row"><span>详细度</span>
+        <select id="set-hud-detail">
+          <option value="full">详细</option>
+          <option value="simple">简版</option>
+          <option value="simple2">简版 2</option>
+        </select>
+      </label>
+      <label class="set-row"><span>状态栏不透明度</span><input id="set-hud-alpha" type="range" min="0.4" max="1" step="0.02" /></label>
+    </div>
+
+    <div class="set-group">
+      <h4>提问</h4>
+      <label class="set-row"><span>闲聊提问</span>
+        <select id="set-ask-every">
+          <option value="0">关闭</option>
+          <option value="15">15 分钟</option>
+          <option value="30">30 分钟</option>
+          <option value="45">45 分钟</option>
+          <option value="60">1 小时</option>
+          <option value="120">2 小时</option>
+        </select>
+      </label>
+      <label class="set-row"><span>对话与审批</span>
+        <select id="set-ask-handling">
+          <option value="pet-all">桌宠逐题问</option>
+          <option value="pet-single">桌宠只接单题</option>
+          <option value="both">两边都问，先答先算</option>
+          <option value="web">只走网页卡片</option>
+        </select>
+      </label>
+      <p id="set-ask-note" class="set-note">对话提问和风险审批都按这里选的方式出现在桌宠或网页卡片上。</p>
+    </div>
+
+    <div class="set-group">
+      <h4>互动</h4>
+      <label class="set-row"><span>自动换姿势</span>
+        <select id="set-pose-every">
+          <option value="0">关闭</option>
+          <option value="30">30 秒</option>
+          <option value="60">1 分钟</option>
+          <option value="120">2 分钟</option>
+          <option value="300">5 分钟</option>
+        </select>
+      </label>
+      <label class="set-row"><span>音效</span>
+        <select id="set-sound-level">
+          <option value="0">关闭</option>
+          <option value="0.5">轻</option>
+          <option value="0.8">中</option>
+          <option value="1">响</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="set-group">
+      <h4>桌宠进程</h4>
+      <div class="set-row set-buttons">
+        <button id="pet-restart" class="set-button" type="button">重启桌宠</button>
+        <button id="pet-stop" class="set-button" type="button">关掉桌宠</button>
+      </div>
+      <p class="set-note">关掉后可以在 dsh 设置 →「昔涟 · 桌宠」里再打开。</p>
+    </div>
+
+    <div class="set-group">
+      <h4>余额</h4>
+      <label class="set-row"><span>DeepSeek API Key</span><input id="set-key" type="password" placeholder="留空表示不修改" /></label>
+      <label class="set-row"><span>余额提醒阈值</span><input id="set-threshold" type="number" min="0" step="1" /></label>
+      <label class="set-row"><span>今日额度</span><input id="set-limit" type="number" min="0" step="1" /></label>
+    </div>
+
+    <footer>
+      <button id="settings-save" class="primary">保存</button>
+      <span id="settings-hint"></span>
+    </footer>
+  </div>
+
+  <script src="assets/live2d/live2dcubismcore.min.js"></script>
+  <script src="assets/live2d/pixi.min.js"></script>
+  <script src="assets/live2d/cubism4.min.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

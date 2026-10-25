@@ -1,5 +1,13 @@
 # dsh-cyrene-balance
 
+## 下载安装
+
+到 [Releases](https://github.com/bestlike093/dsh-cyrene-balance/releases/latest) 下载安装包，解压后复制到 `~/.dsh/profiles/node_modules/`，再在 profile 的 `cordis.patch.yml` 里注册。
+
+| 安装包 | 大小 | SHA-256 |
+| --- | --- | --- |
+| `dsh-cyrene-balance-1.0.0.zip` | 7.6 KB | `9ce06859481f7cd381ebd66c181d592db5567dac6a096c7a737f60df8c29fc7b` |
+
 在 DeepSeek Harness（DSH）里查询 DeepSeek API 余额与今日消费，支持今日额度上限、超限提醒，以及「只看今日额度 / 只看余额」两种视图。
 
 这是 Cyrene 版「昔涟 · 余额桌宠」的 DSH 移植版：去掉桌面立绘与气泡 UI，保留查询、额度、提醒与账本能力。

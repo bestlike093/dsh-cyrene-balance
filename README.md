@@ -6,11 +6,11 @@
 
 - 作者：**柒柒（bestlike093）**
 - 适用平台：Windows
-- 当前版本：**1.0.0**
+- 当前版本：**1.0.1**
 
 ## 五分钟上手
 
-1. 下载 `dsh-cyrene-pet-1.0.0.zip` 并解压到任意目录，例如 `D:\plugins\dsh-cyrene-pet`。
+1. 下载 `dsh-cyrene-pet-1.0.1.zip` 并解压到任意目录，例如 `D:\plugins\dsh-cyrene-pet`。
 2. 在终端执行：
 
    ```bash
@@ -58,12 +58,18 @@
 
 | 来源 | 地址 |
 | --- | --- |
-| GitHub Release | [dsh-cyrene-pet-1.0.0.zip](https://github.com/bestlike093/dsh-cyrene-balance/releases/download/v1.0.0/dsh-cyrene-pet-1.0.0.zip) |
+| GitHub Release | [dsh-cyrene-pet-1.0.1.zip](https://github.com/bestlike093/dsh-cyrene-balance/releases/download/v1.0.1/dsh-cyrene-pet-1.0.1.zip) |
 | 夸克网盘 | [https://pan.quark.cn/s/0f1c821ace8a](https://pan.quark.cn/s/0f1c821ace8a) |
 
-- 安装包：**dsh-cyrene-pet-1.0.0.zip**（约 28.3 MB）
+- 安装包：**dsh-cyrene-pet-1.0.1.zip**（约 28.3 MB）
 - 打开方式：复制链接后在浏览器访问，或打开夸克 APP 自动识别。
 - Release 页同时提供 SHA-256，下载后可以核对完整性。
+
+### 1.0.1 修了什么
+
+- 修掉「拖窗口边缘把窗口改大之后，立绘和状态面板越离越远」：立绘现在锚在状态面板上沿，窗口只按状态面板的实测高度往上长、底边不动；被外部改掉的窗口尺寸会立刻拉回。
+- 状态面板展开 / 收起、改缩放、重启都不再让两者错位；上次的窗口高度会一起记住，启动时不再先矮后长。
+- 拖动改用指针捕获：松手落在窗口外也能正常结束拖动，不会一直粘着鼠标跑。
 
 ## 安装
 
@@ -111,6 +117,7 @@ dsh plugin --profile desktop add <本目录>
 - 单击立绘：随机台词 + 动作。
 - 长按立绘：说一遍当前任务进度。
 - 立绘以外的透明区域点击会穿透，不挡桌面操作。
+- 窗口大小由「缩放」决定（右键 →「设置」→ 缩放），拖窗口边缘不会改出别的尺寸；想更大就调缩放，立绘和状态面板会一起变大。
 - 窗口位置和缩放会记住，下次启动还原。
 
 ### 右键菜单

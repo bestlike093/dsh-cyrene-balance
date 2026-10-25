@@ -701,7 +701,6 @@
       hudHeight: Math.round(hud.getBoundingClientRect().height),
       compact: document.getElementById('hud-compact').textContent,
     })
-    syncWindowHeight()
 
     setText('hud-nickname', live.nickname || '柒柒')
     const quotaInfo = localQuota(live)
@@ -761,6 +760,8 @@
       lastHudKey = layoutKey
       window.requestAnimationFrame(() => layoutModel())
     }
+    /* 文案已经写完，这时量到的状态栏高度才是真的；窗口按它长高 / 收回 */
+    syncWindowHeight()
     report({
       stage: 'hud-rendered',
       hudClass: hud.className,
@@ -957,15 +958,24 @@
     if (window.pet) window.pet.setZoom(next)
   }
 
-  function hudSpace() {
-    if (live === null || live.showHud !== true) return 10
-    const height = hud.getBoundingClientRect().height
-    return Math.max(24, height + 10)
+  function hudHeightNow() {
+    if (live === null || live.showHud !== true) return 0
+    const rect = hud.getBoundingClientRect()
+    return rect.height > 0 ? Math.round(rect.height) : 0
   }
 
-  /* 立绘缩放按「状态栏收起」时的底部预留计算，之后展开 / 收起只移动位置 */
+  function hudSpace() {
+    const height = hudHeightNow()
+    return height > 0 ? height + 10 : 10
+  }
+
+  /* 立绘大小按「状态栏收起」时的底部预留算，位置锚在状态栏上沿：
+     状态栏贴在窗口底边，人物就永远贴着状态栏 —— 窗口拉高拉矮、面板展开收起都不会把两者分开 */
   const BASE_RESERVE = 52
-  let baseWindowHeight = 0
+  const HUD_EDGE = 5
+  const HUD_OVERLAP = 6
+  const COLLAPSED_HUD = 53
+  const MAX_EXTRA = 360
   let lastExtra = -1
 
   function layoutModel() {
@@ -976,14 +986,15 @@
     const iw = model.internalModel.width
     const ih = model.internalModel.height
     if (!iw || !ih) return
-    /* 窗口会随状态栏向上长高；缩放只认基准高度，长出来的部分不参与 */
-    if (baseWindowHeight === 0 || h < baseWindowHeight) baseWindowHeight = h
+    const hudHeight = hudHeightNow()
+    /* 状态栏占掉的底部高度；收起时等于 BASE_RESERVE，保持原来的站位 */
+    const band = hudHeight > 0 ? hudHeight + HUD_EDGE - HUD_OVERLAP : BASE_RESERVE
     const topSpace = 46
-    const availH = Math.max(80, baseWindowHeight - topSpace - BASE_RESERVE)
+    const availH = Math.max(80, h - band - topSpace)
     const scale = Math.min(w / iw, availH / ih)
     model.scale.set(scale)
     model.x = (w - iw * scale) / 2
-    model.y = topSpace + (availH - ih * scale)
+    model.y = h - band - ih * scale
 
     const bubbleBox = document.getElementById('bubble')
     if (bubbleBox !== null) {
@@ -991,37 +1002,42 @@
       bubbleBox.style.top = `${Math.max(4, Math.round(model.y - bubbleH - 2))}px`
     }
 
+    const modelBottom = Math.round(model.y + ih * scale)
+    const hudTop = hudHeight > 0 ? Math.round(h - HUD_EDGE - hudHeight) : null
     report({
       stage: 'layout',
       win: `${w}x${h}`,
       hudSpace: Math.round(hudSpace()),
+      hudHeight,
+      band,
       scale,
       modelY: Math.round(model.y),
-      modelBottom: Math.round(model.y + ih * scale),
+      modelBottom,
+      hudTop,
+      gap: hudTop === null ? null : hudTop - modelBottom,
     })
   }
 
-  /* 状态栏展开时把窗口向上撑高，立绘与面板互不遮挡 */
+  /* 状态栏比收起态多出来的高度让窗口一起往上长：人物大小和站位都不变，面板不会越跑越远 */
   function syncWindowHeight() {
     if (window.pet === undefined || typeof window.pet.setExtraHeight !== 'function') return
-    if (live === null || live.showHud !== true) {
+    const hudHeight = hudHeightNow()
+    if (hudHeight <= 0) {
       if (lastExtra !== 0) {
         lastExtra = 0
         void window.pet.setExtraHeight(0)
       }
       return
     }
-    const height = Math.round(hud.getBoundingClientRect().height)
-    if (height <= 0) return
-    /* 面板比收起态多出来的部分让窗口一起长高，再留一点缝 */
-    const extra = Math.max(0, height - 53 + 10)
-    if (Math.abs(extra - lastExtra) < 2) return
+    const extra = Math.min(MAX_EXTRA, Math.max(0, hudHeight - COLLAPSED_HUD))
+    if (Math.abs(extra - lastExtra) < 1) return
     lastExtra = extra
     void window.pet.setExtraHeight(extra)
   }
 
   window.addEventListener('resize', () => {
     layoutModel()
+    window.setTimeout(syncWindowHeight, 0)
   })
 
   PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false })
@@ -1118,6 +1134,12 @@
         if (event.button === 2) return
         if (!isPointOnPet(event.clientX, event.clientY)) return
         if (onPanel(event.clientX, event.clientY)) return
+        /* 抓住指针：松手在窗口外也能收到 pointerup，拖动不会一直粘着鼠标跑 */
+        try {
+          canvas.setPointerCapture(event.pointerId)
+        } catch {
+          /* 拿不到捕获时退回旧行为 */
+        }
         pressPoint = { x: event.clientX, y: event.clientY }
         pressAt = performance.now()
         pressConsumed = false
@@ -1132,6 +1154,11 @@
       })
 
       window.addEventListener('pointerup', (event) => {
+        try {
+          if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId)
+        } catch {
+          /* 没有捕获时忽略 */
+        }
         if (!dragging) return
         dragging = false
         clearPressTimer()
@@ -1326,10 +1353,16 @@
           }
         })
 
-        window.pet.onZoom((value) => {
-          zoom = Number(value) || zoom
-          baseWindowHeight = 0
-          window.setTimeout(layoutModel, 80)
+        window.pet.onZoom((payload) => {
+          const state = payload !== null && typeof payload === 'object' ? payload : null
+          if (state !== null && typeof state.zoom === 'number') zoom = state.zoom
+          else zoom = Number(payload) || zoom
+          /* 缩放后窗口回到基准高度，状态栏要重新把窗口撑起来 */
+          lastExtra = -1
+          window.setTimeout(() => {
+            layoutModel()
+            syncWindowHeight()
+          }, 80)
         })
 
         window.pet.onCursor((point) => {

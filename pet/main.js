@@ -12,6 +12,7 @@ const COMMAND_PATH = path.join(DATA_DIR, 'pet-command.json')
 
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 1.75
+const MAX_EXTRA_HEIGHT = 360
 
 let win = null
 let tray = null
@@ -26,6 +27,7 @@ let liveTimer = null
 let cursorTimer = null
 let captureTimer = null
 let extraHeight = 0
+let targetSize = { width: 0, height: 0 }
 let shownAskId = 0
 let shownApprovalId = 0
 
@@ -78,6 +80,7 @@ function saveWindowState(extra) {
     y: bounds.y,
     bottomY: bounds.y + bounds.height,
     zoom,
+    extra: extraHeight,
     alwaysOnTop,
     visible: !hidden,
     ...extra,
@@ -130,10 +133,26 @@ function keepInside(x, y, width, height) {
   }
 }
 
-/* 窗口尺寸由程序控制：保持 resizable 以便 setBounds 生效，同时拦掉用户拖边缘的改动 */
+/* 窗口尺寸由程序控制：保持 resizable 以便 setBounds 生效，用户拖边缘改出来的尺寸会被拉回去 */
 function applyBounds(x, y, width, height) {
   if (win === null || win.isDestroyed()) return
+  targetSize = { width, height }
   win.setBounds({ x, y, width, height }, false)
+}
+
+/* 用户拖窗口边缘、或系统替我们改了尺寸时，把尺寸拉回程序设定的值；底边保持不动 */
+function restoreTargetSize() {
+  if (win === null || win.isDestroyed()) return
+  if (targetSize.width <= 0 || targetSize.height <= 0) return
+  const bounds = win.getBounds()
+  if (bounds.width === targetSize.width && bounds.height === targetSize.height) return
+  applyBounds(
+    bounds.x,
+    bounds.y + bounds.height - targetSize.height,
+    targetSize.width,
+    targetSize.height,
+  )
+  saveWindowState()
 }
 
 function applyZoom(next) {
@@ -150,21 +169,26 @@ function applyZoom(next) {
   applyBounds(inside.x, inside.y, width, height)
   saveWindowState()
   rebuildTray()
-  win.webContents.send('pet:zoom', zoom)
+  win.webContents.send('pet:zoom', { zoom, baseWidth: width, baseHeight: height })
 }
 
-/* 状态栏展开时窗口向上长高，人物跟着上移，两者不互相遮挡 */
+/* 状态栏展开时窗口向上长高：底边固定、只往上长，状态栏和人物都不会被推走 */
 function applyExtraHeight(extra) {
   if (win === null) return extraHeight
-  const value = Math.max(0, Math.min(360, Math.round(Number(extra) || 0)))
-  if (Math.abs(value - extraHeight) < 2) return extraHeight
-  extraHeight = value
+  const baseHeight = Math.round(BASE_HEIGHT * zoom)
   const bounds = win.getBounds()
+  const area = screen.getDisplayMatching(bounds).workArea
+  /* 高度不超过工作区，否则状态栏会被顶到屏幕外 */
+  const ceiling = Math.max(0, area.height - 8 - baseHeight)
+  const value = Math.max(0, Math.min(MAX_EXTRA_HEIGHT, ceiling, Math.round(Number(extra) || 0)))
+  if (Math.abs(value - extraHeight) < 1) return extraHeight
+  extraHeight = value
   const width = Math.round(BASE_WIDTH * zoom)
-  const height = Math.round(BASE_HEIGHT * zoom) + value
+  const height = baseHeight + value
   const bottom = bounds.y + bounds.height
-  const inside = keepInside(bounds.x, bottom - height, width, height)
-  applyBounds(inside.x, inside.y, width, height)
+  /* 从底边往上长；贴屏幕顶时允许伸出屏幕外，那块是透明的，人物和状态栏仍在原位 */
+  applyBounds(bounds.x, bottom - height, width, height)
+  saveWindowState()
   return extraHeight
 }
 
@@ -211,7 +235,13 @@ function rebuildTray() {
 function createWindow() {
   const saved = loadWindowState()
   const width = Math.round(BASE_WIDTH * zoom)
-  const height = Math.round(BASE_HEIGHT * zoom)
+  const baseHeight = Math.round(BASE_HEIGHT * zoom)
+  /* 上次的状态栏撑高也一起恢复：重启时窗口不会先矮后长，人物不闪 */
+  const savedExtra = Number(saved.extra)
+  extraHeight = Number.isFinite(savedExtra)
+    ? Math.max(0, Math.min(MAX_EXTRA_HEIGHT, Math.round(savedExtra)))
+    : 0
+  const height = baseHeight + extraHeight
   /* 以底边为锚：窗口随状态栏长高时，人物不会整体漂移 */
   const savedBottom = Number.isFinite(Number(saved.bottomY))
     ? Number(saved.bottomY)
@@ -259,7 +289,10 @@ function createWindow() {
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setIgnoreMouseEvents(true, { forward: true })
+  targetSize = { width, height }
   win.on('will-resize', (event) => event.preventDefault())
+  /* 兜底：Windows 上无边框窗口仍可能被拖出别的尺寸，这里立刻拉回来 */
+  win.on('resize', () => restoreTargetSize())
 
   win.once('ready-to-show', () => {
     if (hidden) win.hide()
@@ -413,6 +446,8 @@ async function captureDiagnostics() {
 
 app.whenReady().then(() => {
   app.setAppUserModelId('dsh.cyrene.pet')
+  /* 诊断文件每次启动重写一次：旧版本的字段不会残留下来误导排查 */
+  writeJson(STATUS_PATH, { at: new Date().toISOString(), stage: 'boot' })
   createWindow()
 
   try {
@@ -445,7 +480,14 @@ app.whenReady().then(() => {
     return true
   })
   ipcMain.handle('pet:bounds', () => (win === null ? null : win.getBounds()))
-  ipcMain.handle('pet:window-state', () => ({ zoom, alwaysOnTop, visible: !hidden }))
+  ipcMain.handle('pet:window-state', () => ({
+    zoom,
+    alwaysOnTop,
+    visible: !hidden,
+    baseWidth: Math.round(BASE_WIDTH * zoom),
+    baseHeight: Math.round(BASE_HEIGHT * zoom),
+    extraHeight,
+  }))
   ipcMain.handle('pet:set-zoom', (_event, value) => {
     applyZoom(value)
     return zoom

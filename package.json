@@ -1,6 +1,6 @@
 {
   "name": "dsh-cyrene-pet",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "昔涟桌面桌宠（DeepSeek Harness 版）：Live2D 立绘、透明置顶窗口、拖拽贴边、点击穿透、气泡台词、DeepSeek 余额、系统状态面板、右键菜单，并接管对话提问 / 风险审批 / 任务进程",
   "type": "module",
   "main": "lib/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "dsh-cyrene-pet",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "昔涟桌面桌宠（DeepSeek Harness 版）：Live2D 立绘、透明置顶窗口、拖拽贴边、点击穿透、气泡台词、DeepSeek 余额、系统状态面板、右键菜单，并接管对话提问 / 风险审批 / 任务进程",
   "type": "module",
   "main": "lib/index.js",
@@ -39,7 +39,8 @@
     "bestlike093"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "dsh": ">=0.2.1-rc.1 <0.3.0-0"
   },
   "license": "MIT",
   "dsh": {
@@ -50,6 +51,22 @@
       "inject": [],
       "platform": "web",
       "immediately": true
+    },
+    "catalog": {
+      "category": "ui",
+      "summary": {
+        "en": "A transparent always-on-top Live2D desktop pet for DeepSeek Harness: it blinks, follows the cursor, talks, shows your DeepSeek balance and system stats, and takes over conversation prompts, risk approvals and task progress.",
+        "zh": "昔涟桌面桌宠：透明置顶的 Live2D 立绘，会眨眼、跟着鼠标看、会说话，顺手显示余额与系统状态，还把对话提问、风险审批、任务进度接到桌面上。"
+      },
+      "capabilities": [
+        "webserver",
+        "storage",
+        "user-question",
+        "approval",
+        "todo-projection",
+        "child-process",
+        "network:api.deepseek.com"
+      ]
     }
   }
 }

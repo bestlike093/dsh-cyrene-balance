@@ -5,12 +5,14 @@
 > 仓库名 `dsh-cyrene-balance` 是它最早做余额插件时留下的，包名与插件目录已经改成 `dsh-cyrene-pet`。安装时认包名和目录，不认仓库名。
 
 - 作者：**柒柒（bestlike093）**
-- 适用平台：Windows
-- 当前版本：**1.0.1**
+- 适用平台：Windows 10 / 11
+- 适配 dsh：**0.2.1-rc.1 ~ 0.2.x**（`engines.dsh: >=0.2.1-rc.1 <0.3.0-0`）
+- 运行环境：dsh 桌面端（桌宠复用它的 Electron 运行时）+ Node ≥ 18
+- 当前版本：**1.0.2**
 
 ## 五分钟上手
 
-1. 下载 `dsh-cyrene-pet-1.0.1.zip` 并解压到任意目录，例如 `D:\plugins\dsh-cyrene-pet`。
+1. 下载 `dsh-cyrene-pet-1.0.2.zip` 并解压到任意目录，例如 `D:\plugins\dsh-cyrene-pet`。
 2. 在终端执行：
 
    ```bash
@@ -29,6 +31,10 @@
 | 运行时 | 立绘出现，单击有台词和动作 |
 | 宿主通信 | 状态面板有 CPU / 内存 / 余额数字，刷新余额会变化 |
 | 三块接管 | Agent 提问弹在桌宠、越权审批弹在桌宠、长按立绘有任务播报 |
+
+## 截图
+
+![桌宠：透明立绘、余额气泡与状态面板](assets/screenshot-pet.png)
 
 ## 它现在能做什么
 
@@ -58,12 +64,19 @@
 
 | 来源 | 地址 |
 | --- | --- |
-| GitHub Release | [dsh-cyrene-pet-1.0.1.zip](https://github.com/bestlike093/dsh-cyrene-balance/releases/download/v1.0.1/dsh-cyrene-pet-1.0.1.zip) |
+| GitHub Release | [dsh-cyrene-pet-1.0.2.zip](https://github.com/bestlike093/dsh-cyrene-balance/releases/download/v1.0.2/dsh-cyrene-pet-1.0.2.zip) |
+| npm | [dsh-cyrene-pet](https://www.npmjs.com/package/dsh-cyrene-pet) |
 | 夸克网盘 | [https://pan.quark.cn/s/0f1c821ace8a](https://pan.quark.cn/s/0f1c821ace8a) |
 
-- 安装包：**dsh-cyrene-pet-1.0.1.zip**（约 28.3 MB）
+- 安装包：**dsh-cyrene-pet-1.0.2.zip**（约 28.3 MB）
 - 打开方式：复制链接后在浏览器访问，或打开夸克 APP 自动识别。
 - Release 页同时提供 SHA-256，下载后可以核对完整性。
+
+### 1.0.2 上架插件市场
+
+- `package.json` 补上 `dsh.catalog`（分类 `ui`、中英简介、能力声明）和 `engines.dsh`，按插件市场的收录格式写全了身份信息。
+- 发布到 npm：`dsh plugin --profile web add dsh-cyrene-pet` 一条命令装好，市场里可以点「安装」。
+- README 补截图与兼容性说明（Windows / dsh 0.2.1-rc.x / 需要 dsh 桌面端）。
 
 ### 1.0.1 修了什么
 
@@ -73,7 +86,15 @@
 
 ## 安装
 
-### 方式一：从压缩包
+### 方式一：从 npm（推荐）
+
+```bash
+dsh plugin --profile desktop add dsh-cyrene-pet@1.0.2
+```
+
+不带版本号就是装最新版：`dsh plugin --profile desktop add dsh-cyrene-pet`。
+
+### 方式二：从压缩包
 
 解压后把整个 `dsh-cyrene-pet/` 目录放到 dsh 的插件目录，再注册：
 
@@ -81,7 +102,7 @@
 dsh plugin --profile desktop add <解压后的 dsh-cyrene-pet 目录>
 ```
 
-### 方式二：从源码目录
+### 方式三：从源码目录
 
 ```bash
 dsh plugin --profile desktop add <本目录>

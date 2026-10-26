@@ -17,6 +17,10 @@
   const W = window.innerWidth
   const H = window.innerHeight
 
+  /* 卡片模式：只保留审批 / 提问卡片，不加载立绘，给已经有自己形象的用户 */
+  const CARD_ONLY = new URLSearchParams(window.location.search).get('ui') === 'card'
+  if (CARD_ONLY) document.body.classList.add('card-only')
+
   let model = null
   let app = null
   let mouthOpen = false
@@ -65,24 +69,26 @@
 
   report({ stage: 'booting', width: W, height: H, dpr: window.devicePixelRatio })
 
-  if (typeof PIXI === 'undefined' || typeof PIXI.live2d === 'undefined') {
+  if (!CARD_ONLY && (typeof PIXI === 'undefined' || typeof PIXI.live2d === 'undefined')) {
     report({ fatal: 'pixi-not-ready', hasPixi: typeof PIXI, hasLive2d: typeof PIXI !== 'undefined' && !!PIXI.live2d })
     return
   }
 
-  app = new PIXI.Application({
-    view: canvas,
-    width: W,
-    height: H,
-    transparent: true,
-    backgroundAlpha: 0,
-    antialias: true,
-    autoDensity: true,
-    resolution: window.devicePixelRatio || 1,
-    powerPreference: 'high-performance',
-  })
+  if (!CARD_ONLY) {
+    app = new PIXI.Application({
+      view: canvas,
+      width: W,
+      height: H,
+      transparent: true,
+      backgroundAlpha: 0,
+      antialias: true,
+      autoDensity: true,
+      resolution: window.devicePixelRatio || 1,
+      powerPreference: 'high-performance',
+    })
 
-  report({ stage: 'pixi-ready', version: PIXI.VERSION })
+    report({ stage: 'pixi-ready', version: PIXI.VERSION })
+  }
 
   const MODEL_URL = 'assets/live2d/cyrene/Cyrene.model3.json'
   const EXPRESSIONS = {
@@ -521,7 +527,7 @@
       askState = { id, index: 0, answers: new Map() }
       paintConversationQuestion(ask)
       pulseAsk()
-      speak('有个问题想问你♪', 2600)
+      if (!CARD_ONLY) speak('有个问题想问你♪', 2600)
       return
     }
     paintPetQuestion(ask)
@@ -565,7 +571,7 @@
     approvalBox.classList.remove('hidden')
     approvalBox.classList.add('pulse')
     window.setTimeout(() => approvalBox.classList.remove('pulse'), 1200)
-    speak('有个操作要你批准一下♪', 2600)
+    if (!CARD_ONLY) speak('有个操作要你批准一下♪', 2600)
   }
 
   function todosOf(source) {
@@ -855,11 +861,14 @@
     settingsOpen = true
     settings.classList.remove('hidden')
     closeMenu()
+    if (CARD_ONLY && window.pet && window.pet.setPanel) window.pet.setPanel('settings')
     if (live !== null) {
       document.getElementById('set-nickname').value = live.nickname || ''
       document.getElementById('set-threshold').value = String(live.balanceThreshold ?? 20)
       document.getElementById('set-limit').value = String(live.dailyLimit ?? 0)
       pickOption('set-scale', live.scale, [0.5, 0.6, 0.7, 0.8, 1, 1.25, 1.5, 1.75], 1)
+      const uiSelect = document.getElementById('set-ui')
+      if (uiSelect !== null) uiSelect.value = live.ui === 'card' ? 'card' : 'pet'
       pickOption('set-font', live.bubbleFont, [12, 14.5, 18], 14.5)
       pickOption('set-bubble-radius', live.bubbleRadius, [0, 10, 18], 0)
 
@@ -893,6 +902,7 @@
   function closeSettings() {
     settingsOpen = false
     settings.classList.add('hidden')
+    if (CARD_ONLY && window.pet && window.pet.setPanel) window.pet.setPanel('normal')
   }
 
   document.getElementById('settings-close').addEventListener('click', closeSettings)
@@ -901,8 +911,12 @@
   if (taskClose !== null) taskClose.addEventListener('click', () => toggleTaskSheet(false))
 
   document.getElementById('settings-save').addEventListener('click', () => {
+    const uiSelect = document.getElementById('set-ui')
+    const ui = uiSelect !== null && uiSelect.value === 'card' ? 'card' : 'pet'
+    const uiBefore = live !== null && live.ui === 'card' ? 'card' : 'pet'
     const patch = {
       nickname: document.getElementById('set-nickname').value,
+      ui,
       balanceThreshold: Number(document.getElementById('set-threshold').value),
       dailyLimit: Number(document.getElementById('set-limit').value),
       scale: Number(document.getElementById('set-scale').value),
@@ -920,8 +934,14 @@
     const key = document.getElementById('set-key').value.trim()
     if (key !== '') patch.apiKey = key
     sendCommand({ action: 'state', patch })
-    setText('settings-hint', '已经记住啦♪')
-    window.setTimeout(closeSettings, 700)
+    if (ui !== uiBefore) {
+      setText('settings-hint', '界面模式换好了，重开一下桌宠……')
+      window.setTimeout(() => sendCommand({ action: 'restartPet' }), 800)
+      window.setTimeout(closeSettings, 900)
+    } else {
+      setText('settings-hint', '已经记住啦♪')
+      window.setTimeout(closeSettings, 700)
+    }
   })
 
   const petRestart = document.getElementById('pet-restart')
@@ -1040,7 +1060,39 @@
     window.setTimeout(syncWindowHeight, 0)
   })
 
-  PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false })
+  /* 托盘里的「打开设置」：卡片模式没有右键菜单，这是切回立绘模式的入口 */
+  if (window.pet && typeof window.pet.onOpenSettings === 'function') {
+    window.pet.onOpenSettings(() => openSettings())
+  }
+
+  /* ------------------------------ 卡片模式 ------------------------------ */
+
+  /* 卡片模式没有立绘，可点区域只剩审批 / 提问卡片；卡片收起时整窗穿透 */
+  let cardInteractive = false
+
+  function syncCardInteractive() {
+    if (!CARD_ONLY) return
+    const active = rectOf(approvalBox) !== null || rectOf(askBox) !== null
+    if (active === cardInteractive) return
+    cardInteractive = active
+    if (window.pet && window.pet.setInteractive) window.pet.setInteractive(active)
+  }
+
+  if (CARD_ONLY && window.pet) {
+    window.pet.onLive((data) => {
+      if (!data || typeof data !== 'object') return
+      live = data
+      renderAsk()
+      renderApproval()
+      syncCardInteractive()
+    })
+
+    window.addEventListener('pointermove', syncCardInteractive)
+    renderApproval()
+  }
+
+  if (!CARD_ONLY) {
+    PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false })
     .then((loaded) => {
       model = loaded
       app.stage.addChild(model)
@@ -1378,4 +1430,5 @@
     .catch((error) => {
       report({ fatal: 'model-load-failed', message: String(error), stack: error && error.stack })
     })
+  }
 })()

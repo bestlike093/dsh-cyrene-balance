@@ -968,3 +968,42 @@ body {
   color: #a7748c;
 }
 
+/* ---------- 设置里的说明 ---------- */
+
+.set-note {
+  margin: 4px 0 2px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #a7748c;
+}
+
+/* ---------- 卡片模式 ---------- */
+
+/* 只留审批 / 提问卡片：立绘、气泡、状态栏、菜单都不参与布局 */
+.card-only #stage,
+.card-only #bubble,
+.card-only #hud,
+.card-only #menu,
+.card-only #task-sheet {
+  display: none !important;
+}
+
+/* 设置仍然可以从托盘打开，打开时窗口会临时放大 */
+.card-only #settings.hidden {
+  display: none !important;
+}
+
+.card-only .approval,
+.card-only .ask {
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  max-height: calc(100% - 16px);
+}
+
+.card-only .approval-text,
+.card-only .ask-text {
+  font-size: 13.5px;
+}
+
+

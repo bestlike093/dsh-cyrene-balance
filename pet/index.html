@@ -110,6 +110,13 @@
     <div class="set-group">
       <h4>形象与气泡</h4>
       <label class="set-row"><span>昵称</span><input id="set-nickname" type="text" maxlength="24" /></label>
+      <label class="set-row"><span>界面模式</span>
+        <select id="set-ui">
+          <option value="pet">完整立绘</option>
+          <option value="card">只显示审批卡片</option>
+        </select>
+      </label>
+      <p class="set-note">卡片模式不加载立绘，只在审批或提问时弹出小卡片，适合已经有自己形象的用户。切换后桌宠会自动重开。</p>
       <label class="set-row"><span>缩放</span>
         <select id="set-scale">
           <option value="0.5">50%</option>

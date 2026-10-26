@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('pet', {
   setZoom: (value) => ipcRenderer.invoke('pet:set-zoom', value),
   setInteractive: (value) => ipcRenderer.invoke('pet:set-interactive', value),
   setExtraHeight: (value) => ipcRenderer.invoke('pet:extra-height', value),
+  setPanel: (mode) => ipcRenderer.invoke('pet:card-panel', mode),
   dragStart: () => ipcRenderer.invoke('pet:drag-start'),
   dragEnd: () => ipcRenderer.invoke('pet:drag-end'),
   command: (payload) => ipcRenderer.invoke('pet:command', payload),
@@ -20,5 +21,8 @@ contextBridge.exposeInMainWorld('pet', {
   },
   onCursor: (callback) => {
     ipcRenderer.on('pet:cursor', (_event, point) => callback(point))
+  },
+  onOpenSettings: (callback) => {
+    ipcRenderer.on('pet:open-settings', () => callback())
   },
 })

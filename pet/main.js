@@ -4,7 +4,11 @@ const path = require('node:path')
 
 const BASE_WIDTH = 480
 const BASE_HEIGHT = 560
+/* 卡片模式：不显示立绘，只留一块审批 / 提问卡片的位置 */
+const CARD_WIDTH = 380
+const CARD_HEIGHT = 240
 const DATA_DIR = path.join(process.env.DSH_HOME || path.join(process.env.USERPROFILE || '.', '.dsh'), 'storages', 'cyrene-pet')
+const STATE_PATH = path.join(DATA_DIR, 'state.json')
 const STATUS_PATH = path.join(DATA_DIR, 'pet-status.json')
 const WINDOW_STATE_PATH = path.join(DATA_DIR, 'pet-window.json')
 const LIVE_PATH = path.join(DATA_DIR, 'live.json')
@@ -30,6 +34,7 @@ let extraHeight = 0
 let targetSize = { width: 0, height: 0 }
 let shownAskId = 0
 let shownApprovalId = 0
+let cardOnly = false
 
 const singleInstance = app.requestSingleInstanceLock()
 if (!singleInstance) {
@@ -60,6 +65,12 @@ function writeJson(file, value) {
 function writeStatus(payload) {
   const previous = readJson(STATUS_PATH, {})
   writeJson(STATUS_PATH, { ...previous, at: new Date().toISOString(), ...payload })
+}
+
+/* 界面模式由宿主写进 state.json，桌宠启动时读一次；切换后由设置页触发重启 */
+function readUiMode() {
+  const saved = readJson(STATE_PATH, null)
+  return saved !== null && saved.ui === 'card' ? 'card' : 'pet'
 }
 
 function loadWindowState() {
@@ -156,7 +167,7 @@ function restoreTargetSize() {
 }
 
 function applyZoom(next) {
-  if (win === null) return
+  if (win === null || cardOnly) return
   const value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(next) || 1))
   const bounds = win.getBounds()
   const width = Math.round(BASE_WIDTH * value)
@@ -172,9 +183,22 @@ function applyZoom(next) {
   win.webContents.send('pet:zoom', { zoom, baseWidth: width, baseHeight: height })
 }
 
+/* 卡片模式打开设置时临时放大窗口，关掉设置再缩回卡片大小 */
+function setCardPanel(mode) {
+  if (win === null || !cardOnly) return
+  const width = mode === 'settings' ? BASE_WIDTH : CARD_WIDTH
+  const height = mode === 'settings' ? BASE_HEIGHT : CARD_HEIGHT
+  const bounds = win.getBounds()
+  const bottom = bounds.y + bounds.height
+  const position = keepInside(bounds.x, bottom - height, width, height)
+  applyBounds(position.x, position.y, width, height)
+  saveWindowState()
+}
+
 /* 状态栏展开时窗口向上长高：底边固定、只往上长，状态栏和人物都不会被推走 */
 function applyExtraHeight(extra) {
   if (win === null) return extraHeight
+  if (cardOnly) return extraHeight
   const baseHeight = Math.round(BASE_HEIGHT * zoom)
   const bounds = win.getBounds()
   const area = screen.getDisplayMatching(bounds).workArea
@@ -226,6 +250,13 @@ function rebuildTray() {
       { label: '说句话', click: () => sendCommand({ action: 'say' }) },
       { label: '换一个姿势', click: () => sendCommand({ action: 'pose' }) },
       { label: '刷新余额', click: () => sendCommand({ action: 'refresh' }) },
+      {
+        label: '打开设置',
+        click: () => {
+          setPetVisible(true)
+          if (win !== null) win.webContents.send('pet:open-settings')
+        },
+      },
       { type: 'separator' },
       { label: '退出桌宠', click: () => app.quit() },
     ]),
@@ -234,10 +265,11 @@ function rebuildTray() {
 
 function createWindow() {
   const saved = loadWindowState()
-  const width = Math.round(BASE_WIDTH * zoom)
-  const baseHeight = Math.round(BASE_HEIGHT * zoom)
+  cardOnly = readUiMode() === 'card'
+  const width = Math.round((cardOnly ? CARD_WIDTH : BASE_WIDTH) * (cardOnly ? 1 : zoom))
+  const baseHeight = Math.round((cardOnly ? CARD_HEIGHT : BASE_HEIGHT) * (cardOnly ? 1 : zoom))
   /* 上次的状态栏撑高也一起恢复：重启时窗口不会先矮后长，人物不闪 */
-  const savedExtra = Number(saved.extra)
+  const savedExtra = cardOnly ? 0 : Number(saved.extra)
   extraHeight = Number.isFinite(savedExtra)
     ? Math.max(0, Math.min(MAX_EXTRA_HEIGHT, Math.round(savedExtra)))
     : 0
@@ -314,7 +346,10 @@ function createWindow() {
     writeStatus({ fatal: 'render-process-gone', details })
   })
 
-  void win.loadFile(path.join(__dirname, 'index.html'))
+  void win.loadFile(
+    path.join(__dirname, 'index.html'),
+    cardOnly ? { query: { ui: 'card' } } : undefined,
+  )
 }
 
 /* ------------------------------ 拖拽 ------------------------------ */
@@ -484,8 +519,9 @@ app.whenReady().then(() => {
     zoom,
     alwaysOnTop,
     visible: !hidden,
-    baseWidth: Math.round(BASE_WIDTH * zoom),
-    baseHeight: Math.round(BASE_HEIGHT * zoom),
+    ui: cardOnly ? 'card' : 'pet',
+    baseWidth: cardOnly ? CARD_WIDTH : Math.round(BASE_WIDTH * zoom),
+    baseHeight: cardOnly ? CARD_HEIGHT : Math.round(BASE_HEIGHT * zoom),
     extraHeight,
   }))
   ipcMain.handle('pet:set-zoom', (_event, value) => {
@@ -498,6 +534,10 @@ app.whenReady().then(() => {
     return true
   })
   ipcMain.handle('pet:extra-height', (_event, value) => applyExtraHeight(value))
+  ipcMain.handle('pet:card-panel', (_event, mode) => {
+    setCardPanel(mode)
+    return true
+  })
   ipcMain.handle('pet:drag-start', () => {
     startDrag()
     return true

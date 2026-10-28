@@ -1006,4 +1006,80 @@ body {
   font-size: 13.5px;
 }
 
+/* ---------- 设置里的说明文档 ---------- */
+
+.set-doc {
+  padding-top: 6px;
+  border-top: 1px dashed rgba(239, 107, 168, 0.22);
+}
+
+.set-doc summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #d23a7a;
+  list-style: none;
+}
+
+.set-doc summary::-webkit-details-marker {
+  display: none;
+}
+
+.set-doc summary::before {
+  content: "▸";
+  font-size: 9px;
+  transition: transform 0.15s ease;
+}
+
+.set-doc[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.set-doc-body {
+  margin-top: 5px;
+  font-size: 10px;
+  line-height: 1.55;
+  color: #7a4a5f;
+}
+
+.set-doc-body p {
+  margin: 7px 0 2px;
+  font-weight: 600;
+  color: #a8506f;
+}
+
+.set-doc-body p:first-child {
+  margin-top: 0;
+}
+
+.set-doc-body ul {
+  margin: 0;
+  padding-left: 14px;
+}
+
+.set-doc-body li {
+  margin: 2px 0;
+}
+
+.set-doc-body code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(239, 107, 168, 0.12);
+  font-size: 9.5px;
+  word-break: break-all;
+}
+
+.set-doc-body .set-doc-warn {
+  margin-top: 7px;
+  padding: 5px 6px;
+  border-radius: 5px;
+  background: rgba(255, 214, 233, 0.55);
+  font-weight: 400;
+  color: #9c4664;
+}
+
 

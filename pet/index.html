@@ -219,6 +219,71 @@
       <label class="set-row"><span>今日额度</span><input id="set-limit" type="number" min="0" step="1" /></label>
     </div>
 
+    <details class="set-doc">
+      <summary>安全须知</summary>
+      <div class="set-doc-body">
+        <p><b>API Key 存在哪里</b></p>
+        <ul>
+          <li>加密后保存在本机，不随插件包分发。</li>
+          <li>解锁凭据绑在这台机器上，别的电脑拿不到。</li>
+          <li>配置文件里不留明文。</li>
+          <li>换机器或重装系统后解不开，需要重新填一次 Key。</li>
+        </ul>
+        <p><b>会联哪些网</b></p>
+        <ul>
+          <li>余额只请求 <code>https://api.deepseek.com/user/balance</code>。</li>
+          <li>提问、审批、任务进程都走 dsh 本机的宿主路由，不出本机。</li>
+          <li>状态面板读本机 CPU / 内存 / GPU / 电量，只在本机显示。</li>
+        </ul>
+        <p><b>审批边界</b></p>
+        <ul>
+          <li>桌宠上只给「允许一次」，没有「总是允许」，也不记规则。</li>
+          <li>同一时间只挂一个审批，第二个会回落到网页卡片。</li>
+          <li>任务进程是只读展示，不会替 Agent 改任何东西。</li>
+        </ul>
+        <p class="set-doc-warn">升级前遗留的备份文件可能含明文，确认一切正常后建议删掉。</p>
+      </div>
+    </details>
+
+    <details class="set-doc">
+      <summary>使用手册</summary>
+      <div class="set-doc-body">
+        <p><b>和立绘互动</b></p>
+        <ul>
+          <li>单击：说句话。</li>
+          <li>双击：换一个姿势。</li>
+          <li>长按：播报当前任务进程。</li>
+          <li>拖动：挪位置，松手后位置和缩放会记住。</li>
+          <li>切到卡片模式后没有立绘，只在审批或提问时弹出小卡片。</li>
+        </ul>
+        <p><b>右键菜单</b></p>
+        <ul>
+          <li><b>状态面板</b>：余额、CPU、内存、GPU、电量。</li>
+          <li><b>显示方式</b>：气泡轮播余额与台词，或只显示其中一种。</li>
+          <li><b>任务进程</b>：当前任务和 todo 列表。</li>
+          <li><b>设置</b>：就是这一页。</li>
+          <li><b>先藏起来</b>：收进托盘，重启 dsh 后会回来。</li>
+        </ul>
+        <p><b>提问和审批在哪弹</b></p>
+        <ul>
+          <li>由「提问 → 对话与审批」决定：桌宠逐题问、只接单题、两边都问、只走网页卡片。</li>
+          <li>桌宠收起时来了提问，会自动露出来，但不抢焦点。</li>
+        </ul>
+        <p><b>余额和额度</b></p>
+        <ul>
+          <li>默认 30 秒缓存一次，右键「刷新余额」可以立即拉。</li>
+          <li>今日消费由余额变化推断，充值不会冲掉已记录的消费。</li>
+          <li>阈值和今日额度填 0 就是不提醒。</li>
+        </ul>
+        <p><b>出问题的时候</b></p>
+        <ul>
+          <li>先点下面的「重启桌宠」，多数情况这样就好了。</li>
+          <li>还不行：关掉 dsh，删掉 <code>~/.dsh/storages/cyrene-pet/runtime/</code>，再启动 dsh 会重新部署。</li>
+          <li>启动链路的日志在 <code>pet-boot.log</code> 和 <code>pet-spawn.log</code>。</li>
+        </ul>
+      </div>
+    </details>
+
     <footer>
       <button id="settings-save" class="primary">保存</button>
       <span id="settings-hint"></span>

@@ -873,6 +873,8 @@
       pickOption('set-bubble-radius', live.bubbleRadius, [0, 10, 18], 0)
 
       document.getElementById('set-bubble-alpha').value = String(live.bubbleAlpha ?? 0.97)
+      const bubbleMode = document.getElementById('set-bubble-mode')
+      if (bubbleMode !== null) bubbleMode.value = live.bubbleMode || 'rotate'
       document.getElementById('set-show-hud').checked = live.showHud !== false
       document.getElementById('set-hud-detail').value = live.hudDetail || 'full'
       document.getElementById('set-hud-alpha').value = String(live.hudAlpha ?? 0.93)
@@ -917,8 +919,6 @@
     const patch = {
       nickname: document.getElementById('set-nickname').value,
       ui,
-      balanceThreshold: Number(document.getElementById('set-threshold').value),
-      dailyLimit: Number(document.getElementById('set-limit').value),
       scale: Number(document.getElementById('set-scale').value),
       bubbleFont: Number(document.getElementById('set-font').value),
       bubbleRadius: Number(document.getElementById('set-bubble-radius').value),
@@ -931,6 +931,19 @@
       poseSeconds: Number(document.getElementById('set-pose-every').value),
       soundVolume: Number(document.getElementById('set-sound-level').value),
     }
+    const bubbleModeNode = document.getElementById('set-bubble-mode')
+    if (bubbleModeNode !== null) patch.bubbleMode = bubbleModeNode.value
+    /*
+     * 留空表示「这次不改」。空字符串直接 Number() 会变成 0，
+     * 而 0 在宿主那边等于「关掉提醒」，不能让它悄悄生效。
+     */
+    const skipped = []
+    const thresholdRaw = document.getElementById('set-threshold').value.trim()
+    const limitRaw = document.getElementById('set-limit').value.trim()
+    if (thresholdRaw !== '' && Number.isFinite(Number(thresholdRaw))) patch.balanceThreshold = Number(thresholdRaw)
+    else skipped.push('余额阈值')
+    if (limitRaw !== '' && Number.isFinite(Number(limitRaw))) patch.dailyLimit = Number(limitRaw)
+    else skipped.push('今日额度')
     const key = document.getElementById('set-key').value.trim()
     if (key !== '') patch.apiKey = key
     sendCommand({ action: 'state', patch })
@@ -939,7 +952,7 @@
       window.setTimeout(() => sendCommand({ action: 'restartPet' }), 800)
       window.setTimeout(closeSettings, 900)
     } else {
-      setText('settings-hint', '已经记住啦♪')
+      setText('settings-hint', skipped.length > 0 ? `${skipped.join('、')}留空，保持原值♪` : '已经记住啦♪')
       window.setTimeout(closeSettings, 700)
     }
   })

@@ -35,7 +35,12 @@ const { mediaKindForName, alignForProfile } = await import(RENDER_CONTRACT.href)
 const results = []
 async function test(name, fn) {
   try {
-    await fn()
+    const outcome = await fn()
+    if (outcome && outcome.skip === true) {
+      results.push({ name, ok: true, skipped: true })
+      console.log('SKIP  ' + name + (outcome.reason ? '  ->  ' + outcome.reason : ''))
+      return
+    }
     results.push({ name, ok: true })
     console.log('PASS  ' + name)
   } catch (error) {
@@ -74,10 +79,27 @@ await test('写入后可取回', async () => {
   assert.equal(await store.getApiKey(), 'sk-test-123')
 })
 
-await test('密文文件不含明文', async () => {
+await test('密文文件不含明文（原始串与 base64 解码后都查）', async () => {
   const { storage, store } = await makeStore()
-  await store.setApiKey('sk-test-123')
-  assert.equal(storage.raw().includes('sk-test-123'), false)
+  const secret = 'sk-test-123'
+  await store.setApiKey(secret)
+
+  const raw = storage.raw()
+  assert.equal(raw.includes(secret), false)
+
+  const strings = []
+  const collect = (value) => {
+    if (typeof value === 'string') strings.push(value)
+    else if (value !== null && typeof value === 'object') {
+      for (const inner of Object.values(value)) collect(inner)
+    }
+  }
+  collect(JSON.parse(raw))
+
+  for (const text of strings) {
+    const decoded = Buffer.from(text, 'base64').toString('utf8')
+    assert.equal(decoded.includes(secret), false)
+  }
 })
 
 await test('空 key 明确抛错且不写入', async () => {
@@ -171,8 +193,7 @@ await test('本机 vault 文件可用本机口令解锁（没有就跳过）', a
   try {
     text = await readFile(vaultPath, 'utf8')
   } catch {
-    console.log('      (本机没有 vault 文件，跳过)' + ' ' + vaultPath)
-    return
+    return { skip: true, reason: '本机没有 vault 文件：' + vaultPath }
   }
 
   let guid = ''
@@ -206,10 +227,11 @@ await test('本机 vault 文件可用本机口令解锁（没有就跳过）', a
   console.log('      (解锁成功，key 长度 ' + key.length + '，未输出内容)')
 })
 
-const passed = results.filter((r) => r.ok).length
+const skippedCount = results.filter((r) => r.skipped).length
+const passed = results.filter((r) => r.ok && !r.skipped).length
 const failed = results.filter((r) => !r.ok)
 console.log('')
-console.log(`结果: ${passed}/${results.length} 通过`)
+console.log(`结果: ${passed} 通过 / ${failed.length} 失败 / ${skippedCount} 跳过（共 ${results.length} 项）`)
 if (failed.length > 0) {
   console.log('失败项:')
   for (const f of failed) console.log('  - ' + f.name + ': ' + f.error)

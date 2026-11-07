@@ -1,6 +1,6 @@
 # dsh-cyrene-pet
 
-昔涟桌面桌宠的 DeepSeek Harness（DSH）版：透明置顶窗口、Live2D 立绘、拖拽贴边、点击穿透、气泡台词、状态面板、右键菜单，并接管对话提问、风险审批与任务进程。也可以切成「卡片模式」，不显示立绘，只留审批与提问卡片。
+昔涟桌面桌宠的 DeepSeek Harness（DSH）版：透明置顶窗口、拖拽贴边、点击穿透、气泡台词、状态面板、右键菜单，并接管对话提问、风险审批与任务进程。2.0 起加入十张内置背景、多端状态合并与 QQ 官方机器人远程拍板；形象可换成单图 / GIF / 视频 / 多帧 sprite，也可以切成不加载立绘的卡片模式。
 
 > 仓库名 `dsh-cyrene-balance` 是它最早做余额插件时留下的，包名与插件目录已经改成 `dsh-cyrene-pet`。安装时认包名和目录，不认仓库名。
 
@@ -36,15 +36,18 @@
 | 能力 | 状态 |
 | --- | --- |
 | 透明无边框置顶窗口 | ✅ |
-| Live2D 模型渲染（moc3 + 物理 + 纹理） | ✅ |
-| 12 个表情 / 5 组动作 / 自动眨眼与呼吸 | ✅ |
+| Live2D 模型渲染（moc3 + 物理 + 纹理） | ⚠️ 需自备模型与运行时，公开包不含 |
+| 12 个表情 / 5 组动作 / 自动眨眼与呼吸 | ⚠️ 仅 Live2D 形象可用 |
 | 视线跟随鼠标 | ✅ |
 | 点击命中区域触发表情与动作 | ✅ |
 | 鼠标拖拽移动、拖到屏幕边缘吸附贴边 | ✅ |
 | 窗口位置与缩放记忆 | ✅ |
 | 非立绘区域点击穿透，不挡桌面操作 | ✅ |
 | 气泡台词轮换、说话时口型动画 | ✅ |
-| 自定义形象：单图 / GIF / 视频 / 多帧 sprite / Live2D 五类都能导入 | ✅ |
+| 自定义形象：单图 / GIF / 视频 / 多帧 sprite / Live2D 五类 | ✅（Live2D 需自备） |
+| 内置背景：十张图，可固定、轮换或换成自己的图片 | ✅ |
+| 多端状态合并：桌宠、QQ 与网页会话的好感、心情、记忆同步 | ✅ |
+| QQ 官方机器人远程拍板：审批与提问可以在 QQ 里处理 | ✅ |
 | 好感与主动开口：会记住相处方式，也会在合适的时候先说话 | ✅ |
 | 记忆注入：新会话会带上固定、常提、最近的几条记忆；日常发言里的自述与偏好也会自动记下 | ✅ |
 | 陪伴状态概览：关系档 / 今日开口 / 记忆条数 | ✅ |
@@ -72,21 +75,21 @@ npm test
 node test/vault.test.mjs
 ```
 
-vault 部分 13 条用例，覆盖写入取回、密文不含明文、空 key 拒绝、清除后写审计、旧明文迁移、迁移审计不泄漏、错误口令、密文篡改检测，以及媒体类型判定和锚点映射。最后一条会尝试解开本机正在用的 vault 文件——没有就跳过，解开后只报长度，不打印内容。
+测试覆盖 vault 加解密（写入取回、密文不含明文、空 key 拒绝、错误口令、密文篡改检测）、人格注入、会话桥、陪伴层同步、宿主节奏与能力中心。
 
-同目录还有人格注入、会话桥、陪伴层同步、宿主节奏与能力中心的测试，`npm test` 会一起跑（30 条）。
-
-不需要 `npm install`，Node 18 以上直接跑。
+公开安装包为控制体积不带 `test/`，要跑测试请从源码仓库检出完整目录。测试只依赖 Node 原生模块，Node 18 以上直接 `npm test`，不需要 `npm install`。
 
 ## 下载
 
 | 来源 | 地址 |
 | --- | --- |
-| GitHub Release | [dsh-cyrene-pet-1.1.0.zip](https://github.com/bestlike093/dsh-cyrene-balance/releases/download/v1.1.0/dsh-cyrene-pet-1.1.0.zip) |
-| 夸克网盘 | [https://pan.quark.cn/s/0f1c821ace8a](https://pan.quark.cn/s/0f1c821ace8a) |
+| GitHub Release | [cyrene-pet-dsh-2.0.0.zip](https://github.com/bestlike093/dsh-cyrene-balance/releases/download/v2.0.0/cyrene-pet-dsh-2.0.0.zip) |
+| 源码包 | [v2.0.0.zip](https://github.com/bestlike093/dsh-cyrene-balance/archive/refs/tags/v2.0.0.zip) |
+| 夸克网盘 | [旧版安装包](https://pan.quark.cn/s/0f1c821ace8a) |
 
-- 安装包：**dsh-cyrene-pet-1.1.0.zip**（约 28.3 MB）
+- 安装包：**cyrene-pet-dsh-2.0.0.zip**（约 35 MB）
 - 打开方式：复制链接后在浏览器访问，或打开夸克 APP 自动识别。
+- 2.0.0 的 Release 附件会在人工验收通过后上传；在那之前可以先用源码包，解压后的目录结构就是插件本体。
 - Release 页同时提供 SHA-256，下载后可以核对完整性。
 
 ## 安装
@@ -483,7 +486,7 @@ dsh 设置页的「昔涟 · 桌宠」卡片里展开「她记住的事」，可
 - `assets/ui/cyrene-thinking-loop/`：情绪特写与状态面板立绘
 - `dist/renderer/stickers/`：44 张小表情
 - `dist/renderer/icons/mimi.png`：状态面板头像
-- `pet/assets/live2d/cyrene/`：Live2D 模型（`model.moc3`、`model.physics3.json`、12 个表情、5 组动作、`texture_0.png`）
+- `pet/assets/live2d/cyrene/`：Live2D 模型（`model.moc3`、`model.physics3.json`、12 个表情、5 组动作、`texture_0.png`）；公开包不含此目录
 
 **Live2D 模型**由 B 站 UP 主 [@是依七哒](https://space.bilibili.com/457683484) 制作，经 Cyrene 资源包引入。本仓库不主张该模型的著作权。
 
@@ -528,7 +531,7 @@ dsh-cyrene-pet/
 │  ├─ index.html     气泡 / 状态面板 / 菜单 / 设置
 │  ├─ renderer.js    Live2D、命中检测、交互、渲染
 │  ├─ style.css      气泡与面板样式
-│  └─ assets/live2d  渲染库与 Live2D 模型（moc3 / expressions / motions / physics3）
+│  └─ assets/live2d  渲染库与 Live2D 模型（moc3 / expressions / motions / physics3；公开包不含）
 ├─ assets/           静态立绘、表情与气泡素材
 ├─ cordis.patch.yml  插件注入声明
 ├─ LICENSE           MIT + 素材例外

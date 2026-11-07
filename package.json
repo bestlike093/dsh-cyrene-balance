@@ -1,12 +1,12 @@
 {
   "name": "dsh-cyrene-pet",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "description": "昔涟桌面桌宠（DeepSeek Harness 版）：Live2D 立绘、透明置顶窗口、拖拽贴边、点击穿透、气泡台词、DeepSeek 余额、系统状态面板、右键菜单，并接管对话提问 / 风险审批 / 任务进程；也可以切成无立绘的卡片模式",
   "type": "module",
   "main": "lib/index.js",
-  "author": "柒柒 (bestlike093)",
+  "author": "旅人 (bestlike093)",
   "contributors": [
-    "柒柒 <https://github.com/bestlike093>"
+    "旅人 <https://github.com/bestlike093>"
   ],
   "repository": {
     "type": "git",
@@ -30,9 +30,6 @@
     "README.md",
     "LICENSE"
   ],
-  "scripts": {
-    "test": "node test/vault.test.mjs"
-  },
   "keywords": [
     "dsh",
     "dsh-plugin",

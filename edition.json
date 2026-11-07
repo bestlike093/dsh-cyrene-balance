@@ -1,0 +1,9 @@
+{
+  "id": "dsh",
+  "label": "DSH 版",
+  "public": true,
+  "redact": true,
+  "live2d": false,
+  "dataSource": "dsh-session",
+  "note": "DSH 插件包，公开下载即用；不含 Live2D 模型，立绘为默认形象。"
+}

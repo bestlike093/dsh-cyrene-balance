@@ -1,18 +1,200 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, protocol, net } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 
 const BASE_WIDTH = 480
 const BASE_HEIGHT = 560
 /* 卡片模式：不显示立绘，只留一块审批 / 提问卡片的位置 */
 const CARD_WIDTH = 380
 const CARD_HEIGHT = 240
-const DATA_DIR = path.join(process.env.DSH_HOME || path.join(process.env.USERPROFILE || '.', '.dsh'), 'storages', 'cyrene-pet')
+const DATA_DIR = process.env.CYRENE_PET_HOME
+  ? path.resolve(process.env.CYRENE_PET_HOME)
+  : path.join(process.env.DSH_HOME || path.join(process.env.USERPROFILE || '.', '.dsh'), 'storages', 'cyrene-pet')
 const STATE_PATH = path.join(DATA_DIR, 'state.json')
 const STATUS_PATH = path.join(DATA_DIR, 'pet-status.json')
 const WINDOW_STATE_PATH = path.join(DATA_DIR, 'pet-window.json')
 const LIVE_PATH = path.join(DATA_DIR, 'live.json')
 const COMMAND_PATH = path.join(DATA_DIR, 'pet-command.json')
+
+/* ------------------------------ 受限素材协议 ------------------------------ */
+
+/*
+ * 渲染层不再拿 file:// 绝对路径。素材只通过 pet-media://local/ 读取，按前缀分根：
+ *   plugin/ —— 插件自己的页面与内置素材
+ *   models/ —— 用户导入的素材包
+ * 单 host 是为了让页面、图片、Live2D 纹理同源，避免 WebGL 跨域读纹理失败。
+ * 其它 host、未知前缀、越界路径、空路径一律拒绝。
+ */
+const MEDIA_HOST = 'local'
+const MEDIA_PREFIXES = [
+  { prefix: 'plugin/', root: path.join(__dirname, '..') },
+  { prefix: 'models/', root: path.join(DATA_DIR, 'models') },
+]
+
+const MEDIA_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.moc3': 'application/octet-stream',
+  '.wasm': 'application/wasm',
+}
+
+function toMediaUrl(prefix, segments) {
+  const safe = segments
+    .filter((item) => typeof item === 'string' && item !== '')
+    .map((item) => item.split('/').filter(Boolean).map(encodeURIComponent).join('/'))
+    .join('/')
+  return `pet-media://${MEDIA_HOST}/${prefix}${safe}`
+}
+
+function resolveMediaPath(requestUrl) {
+  let parsed = null
+  try {
+    parsed = new URL(requestUrl)
+  } catch {
+    return ''
+  }
+  if (parsed.protocol !== 'pet-media:' || parsed.hostname !== MEDIA_HOST) return ''
+  let relative = ''
+  try {
+    relative = decodeURIComponent(parsed.pathname).replace(/^\/+/, '')
+  } catch {
+    return ''
+  }
+  if (relative === '' || relative.includes('\0')) return ''
+  const entry = MEDIA_PREFIXES.find((item) => relative.startsWith(item.prefix))
+  if (entry === undefined) return ''
+  const rest = relative.slice(entry.prefix.length)
+  if (rest === '') return ''
+  const target = path.resolve(entry.root, rest)
+  const inside = path.relative(entry.root, target)
+  if (inside === '' || inside.startsWith('..') || path.isAbsolute(inside)) return ''
+  return target
+}
+
+function registerMediaProtocol() {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: 'pet-media',
+      privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+    },
+  ])
+}
+
+function installMediaHandler() {
+  protocol.handle('pet-media', (request) => {
+    const file = resolveMediaPath(request.url)
+    if (file === '') return new Response('not found', { status: 404 })
+    try {
+      const info = fs.statSync(file)
+      if (!info.isFile()) return new Response('not found', { status: 404 })
+    } catch {
+      return new Response('not found', { status: 404 })
+    }
+    return net.fetch(pathToFileURL(file).href).catch(() => {
+      const type = MEDIA_TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream'
+      return new Response(fs.readFileSync(file), { headers: { 'content-type': type } })
+    })
+  })
+}
+
+registerMediaProtocol()
+
+/* ------------------------------ 背景图 ------------------------------ */
+
+const BACKGROUND_DIR = path.join(DATA_DIR, 'backgrounds')
+const BACKGROUND_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+}
+const BACKGROUND_MAX_BYTES = 24 * 1024 * 1024
+
+function safeBackgroundName(name) {
+  return typeof name === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(name) ? name : ''
+}
+
+const BUILTIN_BACKGROUND_DIR = path.join(__dirname, '..', 'assets', 'backgrounds')
+const BUILTIN_SEED_MARKER = path.join(BACKGROUND_DIR, '.builtin-seeded')
+
+/* marker 记录已经放过的文件名；旧版 marker 是时间戳，读不出名单时按「已放过」处理 */
+function readSeededBackgrounds() {
+  try {
+    const raw = fs.readFileSync(BUILTIN_SEED_MARKER, 'utf8').trim()
+    if (raw.startsWith('{')) {
+      const data = JSON.parse(raw)
+      if (Array.isArray(data.names)) return new Set(data.names)
+    }
+  } catch {
+    /* marker 缺失或损坏，按首次启动处理 */
+  }
+  return null
+}
+
+/* 每次启动补一次新内置图；用户删掉的不会补回来，后续版本新增的仍能进到已装环境 */
+function seedBuiltinBackgrounds() {
+  const seeded = readSeededBackgrounds()
+  try {
+    const names = fs.readdirSync(BUILTIN_BACKGROUND_DIR)
+    fs.mkdirSync(BACKGROUND_DIR, { recursive: true })
+    const next = seeded ?? new Set()
+    for (const name of names) {
+      if (safeBackgroundName(name) === '') continue
+      if (BACKGROUND_TYPES[path.extname(name).toLowerCase()] === undefined) continue
+      if (seeded !== null && seeded.has(name)) continue
+      const target = path.join(BACKGROUND_DIR, name)
+      if (seeded === null && fs.existsSync(target)) {
+        next.add(name)
+        continue
+      }
+      if (!fs.existsSync(target)) fs.copyFileSync(path.join(BUILTIN_BACKGROUND_DIR, name), target)
+      next.add(name)
+    }
+    fs.writeFileSync(BUILTIN_SEED_MARKER, JSON.stringify({ names: [...next].sort() }))
+  } catch {
+    /* 内置图缺失不影响用户自己上传 */
+  }
+}
+
+function listBackgroundFiles() {
+  try {
+    return fs.readdirSync(BACKGROUND_DIR)
+      .filter((name) => safeBackgroundName(name) !== '' && BACKGROUND_TYPES[path.extname(name).toLowerCase()] !== undefined)
+      .map((name) => {
+        try {
+          const info = fs.statSync(path.join(BACKGROUND_DIR, name))
+          return info.isFile()
+            ? { id: name, size: info.size, addedAt: Math.round(info.mtimeMs), builtin: name.startsWith('builtin-') }
+            : null
+        } catch {
+          return null
+        }
+      })
+      .filter((item) => item !== null && item.size > 0)
+      .sort((a, b) => a.addedAt - b.addedAt)
+  } catch {
+    return []
+  }
+}
 
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 1.75
@@ -71,6 +253,36 @@ function writeStatus(payload) {
 function readUiMode() {
   const saved = readJson(STATE_PATH, null)
   return saved !== null && saved.ui === 'card' ? 'card' : 'pet'
+}
+
+/* 形象渲染由宿主写进 state.json：默认立绘；选了 Live2D 且模型文件存在才走 Live2D */
+let modelPack = null
+
+/* model-pack 是 ESM，主进程这边用动态 import 载入；失败就只走内置立绘 */
+async function loadModelPack() {
+  try {
+    modelPack = await import(pathToFileURL(path.join(__dirname, 'model-pack.mjs')).href)
+  } catch {
+    modelPack = null
+  }
+}
+
+/** 读自定义素材配置；没装、目录丢了、sprite.json 坏了都返回 null。 */
+function readModelConfig() {
+  const saved = readJson(STATE_PATH, null)
+  const id = saved !== null && typeof saved.modelId === 'string' ? saved.modelId.trim() : ''
+  if (id === '' || modelPack === null) return null
+  const dir = path.join(DATA_DIR, 'models', id)
+  return modelPack.resolveModelConfig(dir, id)
+}
+
+function readRenderer() {
+  const config = readModelConfig()
+  if (config !== null) return config.kind === 'live2d' ? 'live2d' : 'sprite'
+  const saved = readJson(STATE_PATH, null)
+  if (saved === null || saved.renderer !== 'live2d') return 'sprite'
+  const model = path.join(__dirname, 'assets', 'live2d', 'cyrene', 'Cyrene.model3.json')
+  return fs.existsSync(model) ? 'live2d' : 'sprite'
 }
 
 function loadWindowState() {
@@ -195,6 +407,37 @@ function setCardPanel(mode) {
   saveWindowState()
 }
 
+/* 一键归位：放回主屏右下角，多屏拔插或缩放变化后也能把桌宠找回来 */
+function dockToBottomRight() {
+  if (win === null || win.isDestroyed()) return false
+  const bounds = win.getBounds()
+  const area = screen.getPrimaryDisplay().workArea
+  const width = Math.min(bounds.width, Math.max(1, area.width - 16))
+  const height = Math.min(bounds.height, Math.max(1, area.height - 16))
+  const position = keepInside(
+    Math.round(area.x + area.width - width - 24),
+    Math.round(area.y + area.height - height - 24),
+    width,
+    height,
+  )
+  applyBounds(position.x, position.y, width, height)
+  saveWindowState()
+  writeStatus({ docked: true, dockAt: Date.now() })
+  return true
+}
+
+/* 显示器分辨率、缩放或数量变化后，把当前窗口重新拉回可见区域 */
+function reclampToDisplays() {
+  if (win === null || win.isDestroyed()) return false
+  const bounds = win.getBounds()
+  const clamped = clampToDisplay(bounds.x, bounds.y, bounds.width, bounds.height)
+  const position = keepInside(clamped.x, clamped.y, bounds.width, bounds.height)
+  if (position.x === bounds.x && position.y === bounds.y) return false
+  applyBounds(position.x, position.y, bounds.width, bounds.height)
+  saveWindowState()
+  return true
+}
+
 /* 状态栏展开时窗口向上长高：底边固定、只往上长，状态栏和人物都不会被推走 */
 function applyExtraHeight(extra) {
   if (win === null) return extraHeight
@@ -226,30 +469,24 @@ function setPetVisible(next) {
 }
 
 function setAlwaysOnTop(next) {
-  alwaysOnTop = next
-  if (win !== null) win.setAlwaysOnTop(next, 'screen-saver')
+  alwaysOnTop = next === true
+  if (win !== null) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver')
   saveWindowState()
-  rebuildTray()
-}
-
-function sendCommand(payload) {
-  try {
-    writeJson(COMMAND_PATH, { id: Date.now(), at: new Date().toISOString(), ...payload })
-  } catch {
-    /* 命令写不进去时不影响窗口 */
-  }
 }
 
 function rebuildTray() {
   if (tray === null) return
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: hidden ? '显示桌宠' : '先藏起来', click: () => setPetVisible(hidden) },
-      { label: '总在最前', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
+      { label: hidden ? '显示桌宠' : '隐藏桌宠', click: () => setPetVisible(hidden) },
+      {
+        label: '回到右下角',
+        click: () => {
+          setPetVisible(true)
+          dockToBottomRight()
+        },
+      },
       { type: 'separator' },
-      { label: '说句话', click: () => sendCommand({ action: 'say' }) },
-      { label: '换一个姿势', click: () => sendCommand({ action: 'pose' }) },
-      { label: '刷新余额', click: () => sendCommand({ action: 'refresh' }) },
       {
         label: '打开设置',
         click: () => {
@@ -257,7 +494,6 @@ function rebuildTray() {
           if (win !== null) win.webContents.send('pet:open-settings')
         },
       },
-      { type: 'separator' },
       { label: '退出桌宠', click: () => app.quit() },
     ]),
   )
@@ -311,9 +547,9 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       nodeIntegration: false,
-      webSecurity: false,
+      webSecurity: true,
       backgroundThrottling: false,
     },
   })
@@ -346,10 +582,30 @@ function createWindow() {
     writeStatus({ fatal: 'render-process-gone', details })
   })
 
-  void win.loadFile(
-    path.join(__dirname, 'index.html'),
-    cardOnly ? { query: { ui: 'card' } } : undefined,
-  )
+  const query = new URLSearchParams()
+  if (cardOnly) query.set('ui', 'card')
+  if (!cardOnly && readRenderer() === 'live2d') query.set('renderer', 'live2d')
+  if (!cardOnly) {
+    const model = readModelConfig()
+    if (model !== null) {
+      const payload = { ...model, entry: toMediaUrl('models/', [model.id, model.entry]) }
+      if (Array.isArray(model.poses)) {
+        payload.poses = model.poses.map((pose) => ({
+          name: pose.name,
+          url: toMediaUrl('models/', [model.id, pose.file]),
+        }))
+      }
+      query.set('model', JSON.stringify(payload))
+    }
+  }
+  /* 渲染层加载完成前推送的 live 会丢；这里清掉时间戳，重发一次 */
+  win.webContents.on('did-finish-load', () => {
+    liveMtime = 0
+    pushLive()
+  })
+
+  const suffix = query.toString() === '' ? '' : `?${query.toString()}`
+  void win.loadURL(`pet-media://${MEDIA_HOST}/plugin/pet/index.html${suffix}`)
 }
 
 /* ------------------------------ 拖拽 ------------------------------ */
@@ -479,11 +735,20 @@ async function captureDiagnostics() {
 
 /* ------------------------------ 生命周期 ------------------------------ */
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.setAppUserModelId('dsh.cyrene.pet')
+  /* 受限素材协议必须在建窗之前挂上，否则首帧的 relative 资源会拿不到 */
+  installMediaHandler()
   /* 诊断文件每次启动重写一次：旧版本的字段不会残留下来误导排查 */
   writeJson(STATUS_PATH, { at: new Date().toISOString(), stage: 'boot' })
+  seedBuiltinBackgrounds()
+  /* 素材包解析器先就绪，createWindow 才知道这次该把哪个形象交给渲染层 */
+  await loadModelPack()
   createWindow()
+
+  /* 换分辨率、改缩放、拔掉副屏时，窗口可能落在看不见的地方 */
+  screen.on('display-metrics-changed', reclampToDisplays)
+  screen.on('display-removed', reclampToDisplays)
 
   try {
     tray = new Tray(trayIcon())
@@ -515,6 +780,7 @@ app.whenReady().then(() => {
     return true
   })
   ipcMain.handle('pet:bounds', () => (win === null ? null : win.getBounds()))
+  ipcMain.handle('pet:dock', () => dockToBottomRight())
   ipcMain.handle('pet:window-state', () => ({
     zoom,
     alwaysOnTop,
@@ -527,6 +793,10 @@ app.whenReady().then(() => {
   ipcMain.handle('pet:set-zoom', (_event, value) => {
     applyZoom(value)
     return zoom
+  })
+  ipcMain.handle('pet:set-always-on-top', (_event, value) => {
+    setAlwaysOnTop(value === true)
+    return alwaysOnTop
   })
   ipcMain.handle('pet:set-interactive', (_event, value) => {
     if (win === null || dragging) return false
@@ -550,6 +820,49 @@ app.whenReady().then(() => {
     const command = { id: Date.now(), at: new Date().toISOString(), ...payload }
     writeJson(COMMAND_PATH, command)
     return true
+  })
+  /* 背景图：渲染层只拿字节和清单，真正落盘在这里，宿主半只存选中的 id */
+  ipcMain.handle('pet:backgrounds', () => listBackgroundFiles())
+  ipcMain.handle('pet:background-data', (_event, id) => {
+    const name = safeBackgroundName(id)
+    if (name === '') return ''
+    const type = BACKGROUND_TYPES[path.extname(name).toLowerCase()]
+    if (type === undefined) return ''
+    try {
+      const bytes = fs.readFileSync(path.join(BACKGROUND_DIR, name))
+      if (bytes.length === 0 || bytes.length > BACKGROUND_MAX_BYTES) return ''
+      return `data:${type};base64,${bytes.toString('base64')}`
+    } catch {
+      return ''
+    }
+  })
+  ipcMain.handle('pet:background-upload', (_event, payload) => {
+    const raw = payload !== null && typeof payload?.dataUrl === 'string' ? payload.dataUrl : ''
+    const match = /^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(raw)
+    if (match === null) return { ok: false, error: '图片格式不对，请重新选择' }
+    const ext = Object.keys(BACKGROUND_TYPES).find((key) => BACKGROUND_TYPES[key] === match[1].toLowerCase())
+    if (ext === undefined) return { ok: false, error: '只支持 PNG / JPG / GIF / WebP / AVIF' }
+    const bytes = Buffer.from(match[2], 'base64')
+    if (bytes.length === 0) return { ok: false, error: '图片是空的' }
+    if (bytes.length > BACKGROUND_MAX_BYTES) return { ok: false, error: '图片超过 24MB，换一张小一点的吧' }
+    try {
+      fs.mkdirSync(BACKGROUND_DIR, { recursive: true })
+      const name = `bg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}${ext}`
+      fs.writeFileSync(path.join(BACKGROUND_DIR, name), bytes)
+      return { ok: true, id: name }
+    } catch (error) {
+      return { ok: false, error: error?.message ?? '写入失败' }
+    }
+  })
+  ipcMain.handle('pet:background-remove', (_event, id) => {
+    const name = safeBackgroundName(id)
+    if (name === '') return false
+    try {
+      fs.unlinkSync(path.join(BACKGROUND_DIR, name))
+      return true
+    } catch {
+      return false
+    }
   })
   ipcMain.handle('pet:hide', () => {
     setPetVisible(false)

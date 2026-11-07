@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: pet-media:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
+    <title data-i18n="chat.title">聊天</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./chat.css" />
+  </head>
+  <body>
+    <header class="c-head">
+      <div class="c-brand">
+        <h1 class="c-title" data-i18n="chat.title">聊天</h1>
+        <p class="c-sub" id="c-status" data-i18n="chat.statusLoading">正在读取状态…</p>
+      </div>
+      <div class="c-actions">
+        <button
+          type="button"
+          id="export-btn"
+          class="c-icon"
+          data-i18n-title="chat.exportTitle"
+          title="导出聊天记录"
+          data-i18n="chat.export"
+        >导出</button>
+        <button
+          type="button"
+          id="clear-btn"
+          class="c-icon"
+          data-i18n-title="chat.clearTitle"
+          title="清空对话"
+          data-i18n="chat.clear"
+        >清空</button>
+        <button
+          type="button"
+          id="close-btn"
+          class="c-icon"
+          data-i18n-title="chat.closeTitle"
+          title="关闭"
+        >✕</button>
+      </div>
+    </header>
+
+    <main class="c-log" id="c-log">
+      <p class="c-empty" id="c-empty" data-i18n="chat.empty">还没有聊过。说点什么吧♪</p>
+    </main>
+
+    <div class="c-notice" id="c-notice" hidden>
+      <span id="c-notice-text"></span>
+      <button type="button" id="c-notice-action" class="c-link" hidden data-i18n="chat.openSettings">打开设置</button>
+    </div>
+
+    <footer class="c-compose">
+      <textarea
+        id="c-input"
+        rows="2"
+        data-i18n-placeholder="chat.placeholder"
+        placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
+        spellcheck="false"
+      ></textarea>
+      <button type="button" id="send-btn" class="c-send" data-i18n="chat.send">发送</button>
+    </footer>
+
+    <script src="./reason-text.js"></script>
+    <script src="./chat.js"></script>
+  </body>
+</html>

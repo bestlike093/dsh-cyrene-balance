@@ -1,0 +1,145 @@
+/*
+ * 全局配色：五个窗口（主 / 设置 / 聊天 / 能力 / 首次引导）共用这一份。
+ *
+ * 规则：
+ *  1. 主题只覆盖下面这组语义 token，各窗口样式不许再写具体颜色值。
+ *  2. data-theme 由 theme-boot.js 从 ?theme= 读取，主窗口由 renderer.mjs 直接设置。
+ *  3. --cy-* 与 --pink* 是历史别名，统一映射到 accent 组；旧样式不改也能跟随主题。
+ */
+:root {
+  color-scheme: light;
+
+  /* 主色：OceanBlue（天青），与设置窗的主题预设一一对应 */
+  --accent: #6fa8dc;
+  --accent-deep: #4a86c8;
+  --accent-soft: #e6f1fb;
+  --accent-soft-glass: rgba(230, 241, 251, 0.95);
+  --accent-glow: rgba(111, 168, 220, 0.32);
+  --accent-line: rgba(111, 168, 220, 0.28);
+  --accent-line-strong: rgba(111, 168, 220, 0.5);
+  --accent-shadow: rgba(74, 134, 200, 0.18);
+
+  /* 表面与文字 */
+  --surface: rgba(255, 255, 255, 0.96);
+  --surface-soft: rgba(246, 250, 255, 0.84);
+  --surface-solid: #f6faff;
+  --line: #e2edf7;
+  --shadow: 0 8px 22px rgba(74, 134, 200, 0.18);
+  --ink: #2f3b47;
+  --muted: #6b7c8c;
+
+  /* 气泡与设置侧栏：独立成组，三套主题各自调冷暖，不再写死粉色 */
+  --bubble-bg: linear-gradient(165deg, #f7fbff 0%, #eef6ff 55%, #e3f0fd 100%);
+  --bubble-tail-fill: #e3f0fd;
+  --bubble-border: rgba(255, 255, 255, 0.95);
+  --bubble-shadow-color: rgba(74, 134, 200, 0.18);
+  --settings-nav-from: #f7fbff;
+  --settings-nav-to: #eef6ff;
+  --settings-nav-active: #e3f0fd;
+
+  /* 旧名别名：子窗口历史上一直用 --cy-* / --pink*，值必须跟主题走 */
+  --cy-pink: var(--accent);
+  --cy-pink-deep: var(--accent-deep);
+  --cy-pink-soft: var(--accent-soft);
+  --cy-line: var(--line);
+  --cy-surface: var(--surface-solid);
+  --cy-border: var(--accent-line);
+  --cy-border-strong: var(--accent-line-strong);
+  --cy-ink: var(--ink);
+  --cy-muted: var(--muted);
+  --cy-shadow: var(--shadow);
+  /* 提醒色：余额、记忆写入这类「需要看一眼」的状态用，不参与粉色强调 */
+  --cy-warn: #c27a2c;
+
+  --pink: var(--accent);
+  --pink-deep: var(--accent-deep);
+  --pink-soft: var(--accent-soft);
+  --pink-glow: var(--accent-glow);
+
+  /* 页面底色与开关轨道：聊天窗、设置窗、首次引导共用，跟着主题换 */
+  --page-from: #f7fbff;
+  --page-to: #eef6ff;
+  --switch-track: #dbe7f3;
+
+  /* 主题预览色：只给设置页的配色按钮当缩略图，不跟 data-theme 变 */
+  --theme-preview-blue: #6fa8dc;
+  --theme-preview-pink: #f08bb4;
+  --theme-preview-ink: #8c9aa8;
+
+  /* 不随主题变的中性色：纯白底与错误红，单独收在这里，样式里不再裸写 */
+  --white: #ffffff;
+  --danger: #8a2f2f;
+  /* 危险区的描边与底色由 --danger 派生，三主题自动跟随，不再引入新的裸色值 */
+  --danger-line: color-mix(in srgb, var(--danger) 32%, transparent);
+  --danger-line-strong: color-mix(in srgb, var(--danger) 55%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 8%, var(--surface-solid));
+
+  /* 状态：禁用态统一透明度；控件一档，引导页主按钮更实一档 */
+  --disabled-opacity: 0.5;
+  --disabled-opacity-strong: 0.6;
+
+  --bg: var(--surface-solid);
+}
+
+[data-theme='pink'] {
+  --accent: #f08bb4;
+  --accent-deep: #e0709e;
+  --accent-soft: #fde7f0;
+  --accent-soft-glass: rgba(255, 236, 245, 0.95);
+  --accent-glow: rgba(240, 139, 180, 0.35);
+  --accent-line: rgba(240, 139, 180, 0.28);
+  --accent-line-strong: rgba(240, 139, 180, 0.5);
+  --accent-shadow: rgba(190, 86, 140, 0.18);
+
+  --surface: rgba(255, 255, 255, 0.96);
+  --surface-soft: rgba(255, 250, 252, 0.82);
+  --surface-solid: #fff6fa;
+  --line: #f7dde9;
+  --shadow: 0 8px 22px rgba(190, 80, 130, 0.2);
+  --ink: #4a3540;
+  --muted: #8a707c;
+
+  --bubble-bg: linear-gradient(165deg, #fff7fb 0%, #ffeaf4 55%, #ffdcec 100%);
+  --bubble-tail-fill: #ffdcec;
+  --bubble-border: rgba(255, 255, 255, 0.95);
+  --bubble-shadow-color: rgba(190, 80, 130, 0.18);
+  --settings-nav-from: #fffafc;
+  --settings-nav-to: #ffeef6;
+  --settings-nav-active: #ffdcec;
+
+  --page-from: #fffafc;
+  --page-to: #ffeef6;
+  --switch-track: #f2dae5;
+}
+
+[data-theme='ink'] {
+  --accent: #8c9aa8;
+  --accent-deep: #5f6f7d;
+  --accent-soft: #eef1f4;
+  --accent-soft-glass: rgba(238, 241, 244, 0.95);
+  --accent-glow: rgba(140, 154, 168, 0.34);
+  --accent-line: rgba(140, 154, 168, 0.3);
+  --accent-line-strong: rgba(140, 154, 168, 0.52);
+  --accent-shadow: rgba(42, 48, 56, 0.18);
+
+  --surface: rgba(255, 255, 255, 0.96);
+  --surface-soft: rgba(247, 249, 251, 0.84);
+  --surface-solid: #fdfbfc;
+  --line: #eee6ea;
+  --shadow: 0 8px 22px rgba(42, 48, 56, 0.18);
+  --ink: #2a3038;
+  --muted: #6a7683;
+
+  /* 素纸：取纸色与墨色，不掺粉 */
+  --bubble-bg: linear-gradient(165deg, #fdfbfc 0%, #f6f3f5 55%, #ece7eb 100%);
+  --bubble-tail-fill: #ece7eb;
+  --bubble-border: rgba(255, 255, 255, 0.95);
+  --bubble-shadow-color: rgba(42, 48, 56, 0.16);
+  --settings-nav-from: #fdfbfc;
+  --settings-nav-to: #f6f3f5;
+  --settings-nav-active: #ece7eb;
+
+  --page-from: #fdfbfc;
+  --page-to: #f6f3f5;
+  --switch-track: #e7dbe3;
+}

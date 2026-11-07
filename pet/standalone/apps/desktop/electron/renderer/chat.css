@@ -1,0 +1,305 @@
+/* 聊天窗：配色 token 来自 theme.css，本文件只写布局。 */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  background: linear-gradient(170deg, var(--page-from) 0%, var(--page-to) 100%);
+  color: var(--cy-ink);
+  font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+  font-size: 13px;
+  user-select: none;
+}
+
+/* ---------- 顶栏 ---------- */
+
+.c-head {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 14px 10px;
+  background: linear-gradient(150deg, rgba(255, 246, 250, 0.98), rgba(255, 228, 241, 0.92));
+  border-bottom: 1px solid var(--cy-border);
+}
+
+.c-brand {
+  min-width: 0;
+}
+
+.c-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.c-sub {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--cy-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-actions {
+  -webkit-app-region: no-drag;
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.c-icon {
+  appearance: none;
+  border: 1px solid var(--cy-border);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--cy-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.c-icon:hover {
+  border-color: var(--cy-pink);
+  color: var(--cy-pink-deep);
+}
+
+/* ---------- 消息区 ---------- */
+
+.c-log {
+  overflow-y: auto;
+  padding: 14px 14px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.c-log::-webkit-scrollbar {
+  width: 8px;
+}
+
+.c-log::-webkit-scrollbar-thumb {
+  background: rgba(239, 107, 168, 0.28);
+  border-radius: 999px;
+}
+
+.c-log::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.c-empty {
+  margin: 24px auto 0;
+  padding: 0 20px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--cy-muted);
+}
+
+.c-row {
+  display: flex;
+  flex-direction: column;
+  max-width: 86%;
+}
+
+.c-row.assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.c-row.user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.c-bubble {
+  padding: 8px 11px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.c-row.assistant .c-bubble {
+  background: var(--white);
+  border: 1px solid var(--cy-border);
+  border-bottom-left-radius: 5px;
+  box-shadow: var(--cy-shadow);
+}
+
+.c-row.user .c-bubble {
+  background: linear-gradient(140deg, var(--cy-pink), var(--accent-deep));
+  color: var(--white);
+  border-bottom-right-radius: 5px;
+}
+
+/* 照片气泡：留白收一收，让图自己占满框。 */
+.c-row.assistant .c-bubble.c-photo {
+  padding: 4px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.c-photo img {
+  display: block;
+  max-width: 190px;
+  max-height: 230px;
+  border-radius: 11px;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.c-meta {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--cy-muted);
+}
+
+/* 发送中的省略号气泡。宽度固定，避免文字变化时整行跳动。 */
+.c-typing {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 18px;
+}
+
+.c-typing span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cy-pink);
+  opacity: 0.35;
+  animation: c-blink 1.1s infinite ease-in-out;
+}
+
+.c-typing span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.c-typing span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes c-blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ---------- 提示条 ---------- */
+
+.c-notice {
+  margin: 0 14px 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--cy-border-strong);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--cy-muted);
+  -webkit-app-region: no-drag;
+}
+
+.c-notice[hidden] {
+  display: none;
+}
+
+.c-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--cy-pink-deep);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 0 0 0 4px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.c-link[hidden] {
+  display: none;
+}
+
+/* ---------- 输入区 ---------- */
+
+.c-compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--cy-border);
+  background: rgba(255, 250, 252, 0.94);
+  -webkit-app-region: no-drag;
+}
+
+#c-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 120px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--cy-border);
+  background: var(--white);
+  color: var(--cy-ink);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: none;
+  outline: none;
+  user-select: text;
+}
+
+#c-input:focus {
+  border-color: var(--cy-pink);
+  box-shadow: 0 0 0 3px rgba(239, 107, 168, 0.14);
+}
+
+#c-input:disabled {
+  background: var(--surface-soft);
+  color: var(--cy-muted);
+}
+
+.c-send {
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--cy-pink);
+  background: linear-gradient(140deg, var(--cy-pink), var(--accent-deep));
+  color: var(--white);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.16s ease;
+}
+
+.c-send:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}

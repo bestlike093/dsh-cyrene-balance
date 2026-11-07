@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' file: data: pet-media:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
+    <title data-i18n="gamePage.title">桌宠 · 游戏</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./game.css" />
+  </head>
+  <body>
+    <header class="g-head">
+      <div class="g-head-text">
+        <h1 data-i18n="gamePage.heading">游戏</h1>
+        <p data-i18n="gamePage.headingNote">排班、检测、周常和运行记录都在这一页。设置里只留一个总开关。</p>
+      </div>
+      <button
+        type="button"
+        id="g-close"
+        class="g-close"
+        aria-label="关闭"
+        data-i18n-title="gamePage.close"
+      >
+        ×
+      </button>
+    </header>
+
+    <main class="g-body">
+      <!-- 概览：一眼看完今天的状态，不用往下翻 -->
+      <section class="g-card">
+        <div class="g-card-head">
+          <h2 data-i18n="gamePage.overview">概览</h2>
+          <span id="g-summary" data-i18n="gamePage.loading">读取中…</span>
+        </div>
+        <div class="g-card-body">
+          <div class="g-stats">
+            <div class="g-stat">
+              <b id="g-weekly-points">--</b>
+              <span data-i18n="gamePage.weeklyPoints">本周积分</span>
+            </div>
+            <div class="g-stat">
+              <b id="g-enabled-count">--</b>
+              <span data-i18n="gamePage.enabledGames">已启用的游戏</span>
+            </div>
+          </div>
+          <p class="g-note" id="g-preview" data-i18n="gamePage.noPreview">还没有预览</p>
+        </div>
+      </section>
+
+      <!-- 游戏助手：默认关闭，两次确认后才允许生成计划 -->
+      <section class="g-card">
+        <div class="g-card-head">
+          <h2 data-i18n="gamePage.assistant">游戏助手</h2>
+          <span id="game-assistant-state" data-i18n="gamePage.defaultOff">默认关闭</span>
+        </div>
+        <div class="g-card-body">
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.weeklyTasks">周常任务</div>
+              <div class="g-row-hint" data-i18n="gamePage.weeklyTasksHint">
+                完整通关后点「记录」，未通关也能记部分积分
+              </div>
+            </div>
+            <div class="g-actions" style="padding: 0">
+              <button
+                type="button"
+                class="g-btn"
+                id="game-assistant-open"
+                data-i18n="gamePage.learnAndOpen"
+              >
+                了解并打开
+              </button>
+              <button
+                type="button"
+                class="g-btn g-btn-ghost"
+                id="game-assistant-close"
+                data-i18n="gamePage.closeAssistant"
+                hidden
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+
+          <div id="game-assistant-risk" hidden>
+            <div class="g-row-hint" id="game-assistant-risk-step" data-i18n="gamePage.confirmStep">
+              第 1 / 2 次确认
+            </div>
+            <ul id="game-assistant-risk-list" class="g-row-hint"></ul>
+            <label class="g-check">
+              <input type="checkbox" id="game-assistant-ack" />
+              <span data-i18n="gamePage.riskAck">
+                我已阅读以上风险，并理解这是我自己安装的第三方工具在操作游戏。
+              </span>
+            </label>
+            <label class="g-check">
+              <input type="checkbox" id="game-assistant-understand" />
+              <span data-i18n="gamePage.riskUnderstand">
+                我理解打开后可能真的启动游戏或第三方工具，不再只是演练。
+              </span>
+            </label>
+            <div class="g-row">
+              <div class="g-row-text">
+                <div class="g-row-label" data-i18n="gamePage.phrase">确认短语</div>
+                <div class="g-row-hint" data-i18n="gamePage.phraseHint">
+                  请原样输入：我已知晓风险
+                </div>
+              </div>
+              <input
+                id="game-assistant-phrase"
+                type="text"
+                placeholder="我已知晓风险"
+                data-i18n-placeholder="gamePage.phrasePlaceholder"
+              />
+            </div>
+            <div class="g-actions">
+              <button
+                type="button"
+                class="g-btn g-btn-primary"
+                id="game-assistant-confirm"
+                data-i18n="gamePage.confirmFirst"
+              >
+                第一次确认
+              </button>
+              <button type="button" class="g-btn" id="game-assistant-cancel" data-i18n="gamePage.cancel">
+                取消
+              </button>
+            </div>
+            <p class="g-note" id="game-assistant-feedback"></p>
+          </div>
+
+          <div id="game-assistant-tasks"></div>
+
+          <div class="g-record" id="game-assistant-record" hidden>
+            <div
+              class="g-record-title"
+              id="game-assistant-record-title"
+              data-i18n="gamePage.recordTitle"
+            >
+              记录一次通关
+            </div>
+            <div class="g-row">
+              <div class="g-row-text">
+                <div class="g-row-label" data-i18n="gamePage.difficulty">难度</div>
+              </div>
+              <select id="game-assistant-difficulty">
+                <option value="standard" data-i18n="gamePage.standard">标准</option>
+                <option value="overclock" data-i18n="gamePage.overclock">超频</option>
+                <option value="unknown" data-i18n="gamePage.unknown">不确定</option>
+              </select>
+            </div>
+            <div class="g-row">
+              <div class="g-row-text">
+                <div class="g-row-label" data-i18n="gamePage.points">积分</div>
+                <div class="g-row-hint" data-i18n="gamePage.pointsHint">
+                  完整通关通常 18000；未通关按实际填
+                </div>
+              </div>
+              <input
+                id="game-assistant-points"
+                type="number"
+                min="0"
+                max="18000"
+                step="100"
+                value="18000"
+              />
+            </div>
+            <label class="g-check">
+              <input type="checkbox" id="game-assistant-completed" checked />
+              <span data-i18n="gamePage.completed">这次完整通关了</span>
+            </label>
+            <label class="g-check">
+              <input type="checkbox" id="game-assistant-claimed" />
+              <span data-i18n="gamePage.claimed">积分已经领奖</span>
+            </label>
+            <div class="g-actions">
+              <button
+                type="button"
+                class="g-btn g-btn-primary"
+                id="game-assistant-record-save"
+                data-i18n="gamePage.saveRecord"
+              >
+                保存记录
+              </button>
+              <button
+                type="button"
+                class="g-btn"
+                id="game-assistant-record-cancel"
+                data-i18n="gamePage.cancel"
+              >
+                取消
+              </button>
+            </div>
+            <p class="g-note" id="game-assistant-record-feedback"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 排班：真正决定「她什么时候陪你打」的部分 -->
+      <section class="g-card">
+        <div class="g-card-head">
+          <h2 data-i18n="gamePage.schedule">排班</h2>
+          <span data-i18n="gamePage.scheduleHint">每天或指定星期触发</span>
+        </div>
+        <div class="g-card-body">
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.game">游戏</div>
+              <div class="g-row-hint" data-i18n="gamePage.gameHint">每个游戏一份独立排班</div>
+            </div>
+            <select id="game-select">
+              <option value="genshin" data-i18n="gamePage.genshin">原神</option>
+              <option value="starrail" data-i18n="gamePage.starrail">星穹铁道</option>
+              <option value="hi3" data-i18n="gamePage.hi3">崩坏3</option>
+              <option value="zzz" data-i18n="gamePage.zzz">绝区零</option>
+            </select>
+          </div>
+
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.time">时间</div>
+              <div class="g-row-hint" data-i18n="gamePage.timeHint">触发点</div>
+            </div>
+            <input id="game-time" type="time" value="04:00" />
+          </div>
+
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.days">执行日</div>
+              <div class="g-row-hint" data-i18n="gamePage.daysHint">留空表示每天</div>
+            </div>
+            <div class="g-days">
+              <label
+                ><input class="game-day" type="checkbox" value="1" /><span data-i18n="game.weekday1"
+                  >一</span
+                ></label
+              >
+              <label
+                ><input class="game-day" type="checkbox" value="2" /><span data-i18n="game.weekday2"
+                  >二</span
+                ></label
+              >
+              <label
+                ><input class="game-day" type="checkbox" value="3" /><span data-i18n="game.weekday3"
+                  >三</span
+                ></label
+              >
+              <label
+                ><input class="game-day" type="checkbox" value="4" /><span data-i18n="game.weekday4"
+                  >四</span
+                ></label
+              >
+              <label
+                ><input class="game-day" type="checkbox" value="5" /><span data-i18n="game.weekday5"
+                  >五</span
+                ></label
+              >
+              <label
+                ><input class="game-day" type="checkbox" value="6" /><span data-i18n="game.weekday6"
+                  >六</span
+                ></label
+              >
+              <label
+                ><input class="game-day" type="checkbox" value="0" /><span data-i18n="game.weekday0"
+                  >日</span
+                ></label
+              >
+            </div>
+          </div>
+
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.timeout">单轮超时</div>
+              <div class="g-row-hint" data-i18n="gamePage.timeoutHint">分钟，5–180</div>
+            </div>
+            <input id="game-timeout" type="number" min="5" max="180" step="5" value="150" />
+          </div>
+
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.enabled">启用这个游戏</div>
+              <div class="g-row-hint" data-i18n="gamePage.enabledHint">
+                关闭时不会注册计划任务
+              </div>
+            </div>
+            <input id="game-enabled" type="checkbox" />
+          </div>
+
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.launchGame">先启动游戏</div>
+              <div class="g-row-hint" data-i18n="gamePage.launchGameHint">
+                真实执行前自动拉起本体；演练永远不启动
+              </div>
+            </div>
+            <input id="game-launch-game" type="checkbox" />
+          </div>
+
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.enginePath">执行器路径</div>
+              <div class="g-row-hint" data-i18n="gamePage.enginePathHint">
+                真实执行时启动的程序；演练可留空
+              </div>
+            </div>
+            <input id="game-engine-path" type="text" placeholder="D:\BetterGI\BetterGI.exe" />
+          </div>
+
+          <div class="g-actions">
+            <button type="button" class="g-btn g-btn-primary" id="game-save" data-i18n="gamePage.save">
+              保存排班
+            </button>
+            <button type="button" class="g-btn" id="game-dry-run" data-i18n="gamePage.dryRun">
+              演练预览
+            </button>
+            <button type="button" class="g-btn" id="game-apply" data-i18n="gamePage.apply">
+              应用计划任务
+            </button>
+            <button type="button" class="g-btn" id="game-task-query" data-i18n="gamePage.query">
+              查询任务状态
+            </button>
+            <button
+              type="button"
+              class="g-btn g-btn-ghost"
+              id="game-disable"
+              data-i18n="gamePage.disable"
+            >
+              关闭这个游戏
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 环境：装没装、找不找得到 -->
+      <section class="g-card">
+        <div class="g-card-head">
+          <h2 data-i18n="gamePage.env">环境</h2>
+          <button type="button" class="g-btn" id="game-detect" data-i18n="gamePage.redetect">
+            重新检测
+          </button>
+        </div>
+        <div class="g-card-body">
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label">BetterGI</div>
+              <div class="g-row-hint" id="game-bettergi-status" data-i18n="gamePage.notDetected">
+                还没有检测
+              </div>
+            </div>
+          </div>
+          <div class="g-row">
+            <div class="g-row-text">
+              <div class="g-row-label" data-i18n="gamePage.gamePath">游戏本体</div>
+              <div class="g-row-hint" id="game-path-status" data-i18n="gamePage.notDetectedTwo">
+                还没有检测
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 运行记录：属于「看」的东西，不该占设置的位置 -->
+      <section class="g-card">
+        <div class="g-card-head">
+          <h2 data-i18n="gamePage.runs">最近运行</h2>
+          <span data-i18n="gamePage.readonly">只读</span>
+        </div>
+        <div class="g-card-body">
+          <div id="game-runs"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="./i18n.js"></script>
+    <script src="./game.js"></script>
+  </body>
+</html>

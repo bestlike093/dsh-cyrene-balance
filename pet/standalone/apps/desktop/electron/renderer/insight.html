@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' file: data: pet-media:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
+    <title data-i18n="insight.title">她 · 观察台</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./insight.css" />
+  </head>
+  <body>
+    <header class="i-head">
+      <div class="i-head-text">
+        <h1 data-i18n="insight.heading">她此刻的样子</h1>
+        <p data-i18n="insight.lead">
+          这里能看到她记得什么、跟谁熟、今天开了几次口。没读到的地方会空着，人家不替她猜。
+        </p>
+      </div>
+      <div class="i-head-actions">
+        <button type="button" id="i-refresh" class="i-ghost" data-i18n="insight.refresh">再看一眼</button>
+        <button
+          type="button"
+          id="i-close"
+          class="i-close"
+          data-i18n-aria-label="insight.close"
+          aria-label="关闭"
+        >
+          ×
+        </button>
+      </div>
+    </header>
+
+    <nav class="i-tabs" role="tablist" data-i18n-aria-label="insight.tabs" aria-label="观察台分区">
+      <button
+        type="button"
+        class="i-tab is-active"
+        data-panel="today"
+        role="tab"
+        aria-selected="true"
+        data-i18n="insight.tabToday"
+      >
+        今天
+      </button>
+      <button
+        type="button"
+        class="i-tab"
+        data-panel="mind"
+        role="tab"
+        aria-selected="false"
+        data-i18n="insight.tabMind"
+      >
+        念头
+      </button>
+      <button
+        type="button"
+        class="i-tab"
+        data-panel="proactive"
+        role="tab"
+        aria-selected="false"
+        data-i18n="insight.tabProactive"
+      >
+        主动
+      </button>
+      <button
+        type="button"
+        class="i-tab"
+        data-panel="bonds"
+        role="tab"
+        aria-selected="false"
+        data-i18n="insight.tabBonds"
+      >
+        关系
+      </button>
+      <button
+        type="button"
+        class="i-tab"
+        data-panel="memory"
+        role="tab"
+        aria-selected="false"
+        data-i18n="insight.tabMemory"
+      >
+        记忆
+      </button>
+    </nav>
+
+    <main class="i-body">
+      <section class="i-panel is-active" data-panel="today">
+        <div class="i-cards" id="i-cards"></div>
+        <p class="i-note" id="i-today-note" data-i18n="insight.loading">正在看她现在的状态……</p>
+
+        <div class="i-block">
+          <div class="i-block-head">
+            <h2 data-i18n="insight.agenda">今天的几段安排</h2>
+            <span class="i-note" id="i-agenda-note"></span>
+          </div>
+          <div class="i-list" id="i-agenda"></div>
+        </div>
+      </section>
+
+      <section class="i-panel" data-panel="mind" hidden>
+        <div class="i-block">
+          <div class="i-block-head">
+            <h2 data-i18n="insight.thoughts">还没说出口的话</h2>
+            <span class="i-note" id="i-thoughts-count"></span>
+          </div>
+          <div class="i-list" id="i-thoughts"></div>
+        </div>
+      </section>
+
+      <section class="i-panel" data-panel="proactive" hidden>
+        <div class="i-block">
+          <div class="i-block-head">
+            <h2 data-i18n="insight.proactive">今天主动说了几次</h2>
+            <span class="i-note" id="i-proactive-note"></span>
+          </div>
+          <div class="i-list" id="i-proactive"></div>
+        </div>
+
+        <div class="i-block">
+          <div class="i-block-head">
+            <h2 data-i18n="insight.decisions">最近为什么开口，或者忍住</h2>
+            <span class="i-note" data-i18n="insight.decisionsNote">她自己留下的理由，原文照搬。</span>
+          </div>
+          <div class="i-list" id="i-decisions"></div>
+        </div>
+      </section>
+
+      <section class="i-panel" data-panel="bonds" hidden>
+        <p class="i-note i-note-block" data-i18n="insight.bondsNote">
+          每段对话各记一份好感。锁住以后她自己不改数字，只有你手动调才算数；归零只清这一份。
+        </p>
+        <div class="i-list" id="i-bonds"></div>
+
+        <div class="i-block">
+          <div class="i-block-head">
+            <h2 data-i18n="insight.handoff">刚从别处接上的话</h2>
+            <span class="i-note" id="i-handoff-note"></span>
+          </div>
+          <p class="i-note i-note-block" data-i18n="insight.handoffNote">
+            桌面和 QQ 私聊之间能带一句没说完的话题；只留两小时，说过一次就收起来。
+          </p>
+          <div class="i-list" id="i-handoffs"></div>
+        </div>
+      </section>
+
+      <section class="i-panel" data-panel="memory" hidden>
+        <div class="i-block-head">
+          <h2 data-i18n="insight.memory">她记住的事</h2>
+          <div class="i-tools">
+            <select id="i-layer" data-i18n-aria-label="insight.layerLabel" aria-label="按层看">
+              <option value="" data-i18n="insight.layerAll">全部</option>
+              <option value="L0" data-i18n="insight.layerL0">底色</option>
+              <option value="L1" data-i18n="insight.layerL1">近况</option>
+              <option value="L2" data-i18n="insight.layerL2">对话里的事</option>
+            </select>
+            <input
+              id="i-search"
+              type="search"
+              data-i18n-placeholder="insight.searchPlaceholder"
+              data-i18n-aria-label="insight.searchLabel"
+              placeholder="搜一句话"
+              aria-label="搜索记忆"
+            />
+            <button type="button" id="i-memory-load" class="i-ghost" data-i18n="insight.find">找一页</button>
+          </div>
+        </div>
+        <p class="i-note" id="i-memory-count" data-i18n="insight.notRead">还没读。</p>
+        <div class="i-list" id="i-memory"></div>
+        <div class="i-more">
+          <button type="button" id="i-memory-more" class="i-ghost" data-i18n="insight.more" hidden>
+            再看一页
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <div class="i-toast" id="i-toast" role="status" aria-live="polite" hidden></div>
+
+    <script src="./insight.js"></script>
+  </body>
+</html>

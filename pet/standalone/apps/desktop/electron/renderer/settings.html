@@ -1,0 +1,1863 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' file: data: pet-media:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
+    <title data-i18n="app.title">桌宠 · 设置</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <aside class="s-nav">
+      <div class="s-brand">
+        <h1 class="s-title" data-i18n="nav.title">设置</h1>
+        <p class="s-sub" data-i18n="nav.sub">改完立即生效</p>
+      </div>
+      <div class="s-search">
+        <input
+          id="settings-search"
+          type="search"
+          placeholder="搜索设置项"
+          data-i18n-placeholder="nav.search"
+          autocomplete="off"
+        />
+        <span class="s-search-count" id="search-count" hidden></span>
+      </div>
+            <nav class="s-nav-list" id="nav">
+        <button type="button" data-group="overview" class="active">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8" /><path d="M12 7.5V12l3 2" /></svg>
+          <span data-i18n="nav.overview">概览</span>
+        </button>
+        <button type="button" data-group="self">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.3-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.7-7 9-7 9z" /></svg>
+          <span data-i18n="nav.self">她的样子</span>
+        </button>
+        <button type="button" data-group="talk">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z" /><path d="M8 9h8M8 12h5" /></svg>
+          <span data-i18n="nav.talk">说话与声音</span>
+        </button>
+        <button type="button" data-group="company">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.3 6.3l2.1 2.1M15.6 15.6l2.1 2.1M17.7 6.3l-2.1 2.1M8.4 15.6l-2.1 2.1" /></svg>
+          <span data-i18n="nav.company">陪伴</span>
+        </button>
+        <button type="button" data-group="memory">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v18H7.5A2.5 2.5 0 0 1 5 18.5z" /><path d="M9 3v18" /></svg>
+          <span data-i18n="nav.memory">记忆</span>
+        </button>
+        <button type="button" data-group="more">
+          <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6H21" /></svg>
+          <span data-i18n="nav.more">能力与数据</span>
+        </button>
+      </nav>
+    </aside>
+
+    <main class="s-body" id="s-body">
+      <header class="s-pagehead" id="page-head">
+        <div class="s-pagehead-text">
+          <p class="s-pagehead-kicker" id="page-group" data-i18n="nav.overview">概览</p>
+          <h2 class="s-pagehead-title" id="page-title" data-i18n="panel.overview">概览</h2>
+          <p class="s-pagehead-desc" id="page-desc" data-i18n="page.overview.desc">先看她现在能不能说话，再决定改哪里。</p>
+        </div>
+        <div class="s-windowbar">
+          <div class="s-save-state" id="save-state" data-state="idle" role="status" aria-live="polite">
+            <span class="s-save-dot" aria-hidden="true"></span>
+            <span id="save-state-text" data-i18n="save.idle">已同步</span>
+          </div>
+          <div class="s-win-controls">
+            <button type="button" id="win-min" class="s-win-btn" data-i18n-title="win.minimize" data-i18n-aria-label="win.minimize" title="最小化" aria-label="最小化">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" /></svg>
+            </button>
+            <button type="button" id="win-max" class="s-win-btn" data-i18n-title="win.maximize" data-i18n-aria-label="win.maximize" title="最大化" aria-label="最大化">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.4" /></svg>
+            </button>
+            <button type="button" id="win-close" class="s-win-btn s-win-close" data-i18n-title="win.close" data-i18n-aria-label="win.close" title="关闭" aria-label="关闭">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+            <div class="s-subnav" id="subnav" hidden>
+        <button type="button" data-panel="overview" data-group="overview" data-i18n="panel.overview">概览</button>
+        <button type="button" data-panel="general" data-group="self" data-i18n="panel.general">样子</button>
+        <button type="button" data-panel="hud" data-group="self" data-i18n="panel.hud">状态栏</button>
+        <button type="button" data-panel="connection" data-group="talk" data-i18n="panel.connection">连接与对话</button>
+        <button type="button" data-panel="voice" data-group="talk" data-i18n="panel.voice">语音与语言</button>
+        <button type="button" data-panel="proactive" data-group="company" data-i18n="panel.proactive">主动台词</button>
+        <button type="button" data-panel="routine" data-group="company" data-i18n="panel.routine">她的一天</button>
+        <button type="button" data-panel="memory" data-group="memory" data-i18n="panel.memory">记忆</button>
+        <button type="button" data-panel="ability" data-group="more" data-i18n="panel.ability">能力</button>
+        <button type="button" data-panel="account" data-group="more" data-i18n="panel.account">账号</button>
+        <button type="button" data-panel="data" data-group="more" data-i18n="panel.data">数据与运行</button>
+      </div>
+
+      <div class="s-search-empty" id="search-empty" hidden>
+        <strong data-i18n="search.emptyTitle">没有匹配的设置项</strong>
+        <span data-i18n="search.emptyHint">换个词试试，或清空搜索。</span>
+      </div>
+
+      <!-- 概览 -->
+      <div class="panel active" data-panel="overview">
+        <section class="section">
+          <h2 class="section-title" data-i18n="overview.statusTitle">她现在怎么样</h2>
+          <p class="section-note" data-i18n="overview.statusNote">
+            这里只显示已经读到的状态，不会额外发起请求。
+          </p>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="overview.model">能不能聊天</div>
+              <div class="item-hint" data-i18n="overview.modelHint">要先填一个可用的模型接口</div>
+            </div>
+            <span class="diag-val" id="overview-model">—</span>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="overview.voice">能不能出声</div>
+              <div class="item-hint" data-i18n="overview.voiceHint">语音服务填好地址后才会说话</div>
+            </div>
+            <span class="diag-val" id="overview-voice">—</span>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="overview.agenda">今天在忙什么</div>
+              <div class="item-hint" id="overview-agenda" data-i18n="overview.agendaEmpty">还没读到今天的安排</div>
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="overview.startTitle">三步就能开始</h2>
+          <p class="section-note" data-i18n="overview.startNote">
+            先让她能回话，再让她有声音，最后调她主动找你的频率。任何一步都可以先跳过。
+          </p>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="overview.step1">第 1 步 · 让她能开口</div>
+              <div class="item-hint" data-i18n="overview.step1Hint">填一个可用的模型接口，她才能回你的话。</div>
+            </div>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="overview.step2">第 2 步 · 让她有声音</div>
+              <div class="item-hint" data-i18n="overview.step2Hint">接上语音服务，再把音色和语速调舒服。</div>
+            </div>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="overview.step3">第 3 步 · 定她找你的节奏</div>
+              <div class="item-hint" data-i18n="overview.step3Hint">多久开口一次、什么时段安静，都由你决定。</div>
+            </div>
+          </div>
+          <div class="model-actions">
+            <button type="button" id="overview-open-chat" data-i18n="overview.openChat">去填模型</button>
+            <button type="button" id="overview-open-voice" data-i18n="overview.openVoice">去调声音</button>
+            <button type="button" id="overview-open-company" data-i18n="overview.openCompany">去定节奏</button>
+          </div>
+          <p class="section-note" data-i18n="overview.insightNote">
+            想看她最近在做什么，可以打开只读的观察台，不会改任何设置。
+          </p>
+          <div class="model-actions">
+            <button type="button" id="overview-open-insight" data-i18n="overview.openInsight">打开观察台</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- 她的样子 -->
+      <div class="panel" data-panel="general">
+        <details class="section-group" open>
+          <summary class="section-group-title" data-i18n="general.groupLook">外观与立绘</summary>
+        <section class="section">
+          <h2 class="section-title" data-i18n="general.appearance">外观</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.nickname">称呼</div>
+              <div class="item-hint" data-i18n="general.nicknameHint">她怎么叫你</div>
+            </div>
+            <input id="nickname" type="text" maxlength="16" placeholder="怎么称呼你" data-i18n-placeholder="general.nicknamePlaceholder" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.theme">配色</div>
+              <div class="item-hint" data-i18n="general.themeHint">影响设置窗与提示条的主色</div>
+            </div>
+            <div class="seg" id="theme-seg">
+              <button type="button" data-theme="OceanBlue" data-i18n="general.themeOcean">天青</button>
+              <button type="button" data-theme="SakuraPink" data-i18n="general.themeSakura">樱粉</button>
+              <button type="button" data-theme="Paper" data-i18n="general.themePaper">素纸</button>
+            </div>
+          </div>
+          <button type="button" class="section-reset" data-reset="nickname" data-i18n="general.reset">恢复默认</button>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="general.model">立绘</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.currentModel">当前模型</div>
+              <div class="item-hint" data-i18n="general.modelHint">模型不随应用分发，需要你自己导入</div>
+            </div>
+            <select id="live2d-model">
+              <option value="" data-i18n="general.modelNone">不使用模型</option>
+            </select>
+          </div>
+
+          <div class="model-actions">
+            <button type="button" id="import-model-zip" data-i18n="general.importZip">导入压缩包</button>
+            <button type="button" id="import-model-folder" data-i18n="general.importFolder">导入文件夹</button>
+            <button type="button" id="open-models-folder" data-i18n="general.openFolder">打开模型目录</button>
+          </div>
+
+          <div class="asset-grid" id="model-grid"></div>
+
+          <p class="section-note" id="model-status" data-i18n="general.modelEmpty">还没有导入模型</p>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.outline">描边</div>
+              <div class="item-hint" data-i18n="general.outlineHint">浅色桌面上白边更清楚；深色桌面可以换深边</div>
+            </div>
+            <select id="presence-outline">
+              <option value="light" data-i18n="general.outlineLight">白边</option>
+              <option value="dark" data-i18n="general.outlineDark">深边</option>
+              <option value="auto" data-i18n="general.outlineAuto">按亮度自动</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.poseEvery">换立绘间隔</div>
+              <div class="item-hint" data-i18n="general.poseEveryHint">默认图片模式每隔多久换一次姿势；关闭后只在你点击时换</div>
+            </div>
+            <select id="poseEverySeconds">
+              <option value="0" data-i18n="general.poseEveryOff">关闭</option>
+              <option value="30" data-i18n="general.poseEvery30">30 秒</option>
+              <option value="60" data-i18n="general.poseEvery60">60 秒</option>
+              <option value="120" data-i18n="general.poseEvery120">120 秒</option>
+              <option value="300" data-i18n="general.poseEvery300">300 秒</option>
+            </select>
+          </div>
+          <button type="button" class="section-reset" data-reset="poseEverySeconds" data-i18n="general.reset">恢复默认</button>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="general.size">角色尺寸</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.profile">比例</div>
+              <div class="item-hint" data-i18n="general.profileHint">窗口按这套比例重设</div>
+            </div>
+            <select id="profile">
+              <option value="vertical" data-i18n="general.profileVertical">竖屏 600×800</option>
+              <option value="horizontal" data-i18n="general.profileHorizontal">横屏 800×450</option>
+              <option value="square" data-i18n="general.profileSquare">方屏 512×512</option>
+              <option value="card" data-i18n="general.profileCard">卡片 380×240</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.scale">缩放</div>
+              <div class="item-hint" data-i18n="general.scaleHint">0.2 ~ 1.4 倍</div>
+            </div>
+            <div class="range-wrap">
+              <input id="scale" type="range" min="0.2" max="1.4" step="0.05" />
+              <span class="range-value" id="scale-value">0.70</span>
+            </div>
+          </div>
+          <button type="button" class="section-reset" data-reset="profile,window" data-i18n="general.reset">恢复默认</button>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="general.window">窗口</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.alwaysOnTop">总在最前</div>
+              <div class="item-hint" data-i18n="general.alwaysOnTopHint">切到别的窗口她也留在上面</div>
+            </div>
+            <label class="switch">
+              <input id="alwaysOnTop" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.edgeSnap">边缘吸附</div>
+              <div class="item-hint" data-i18n="general.edgeSnapHint">拖到屏幕边缘附近会自动贴上去</div>
+            </div>
+            <label class="switch">
+              <input id="edgeSnap" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.edgeSnapDistance">吸附距离</div>
+              <div class="item-hint" data-i18n="general.edgeSnapDistanceHint">拖到边缘这个距离内就贴上去（4–64 像素）</div>
+            </div>
+            <input id="edgeSnapDistance" type="number" min="4" max="64" step="1" placeholder="12" />
+          </div>
+          <button type="button" class="section-reset" data-reset="window" data-i18n="general.reset">恢复默认</button>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="general.bubble">气泡</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.bubbleMode">显示内容</div>
+              <div class="item-hint" data-i18n="general.bubbleModeHint">轮播会在台词与状态之间交替</div>
+            </div>
+            <select id="bubble-mode">
+              <option value="rotate" data-i18n="general.bubbleRotate">轮播</option>
+              <option value="info" data-i18n="general.bubbleInfo">只显示信息</option>
+              <option value="talk" data-i18n="general.bubbleTalk">只显示台词</option>
+              <option value="today" data-i18n="general.bubbleToday">只看今日额度</option>
+              <option value="balance" data-i18n="general.bubbleBalance">只看余额</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.bubbleFont">字号</div>
+              <div class="item-hint" data-i18n="general.bubbleFontHint">10 ~ 22 px</div>
+            </div>
+            <div class="range-wrap">
+              <input id="bubble-fontSize" type="range" min="10" max="22" step="0.5" />
+              <span class="range-value" id="bubble-fontSize-value">14.5</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.bubbleWidth">气泡宽度</div>
+              <div class="item-hint" data-i18n="general.bubbleWidthHint">0 表示跟随窗口；最长 600 px</div>
+            </div>
+            <div class="range-wrap">
+              <input id="bubble-width" type="range" min="0" max="600" step="10" />
+              <span class="range-value" id="bubble-width-value">300</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.bubbleRadius">圆角</div>
+              <div class="item-hint" data-i18n="general.bubbleRadiusHint">0 ~ 24 px</div>
+            </div>
+            <div class="range-wrap">
+              <input id="bubble-radius" type="range" min="0" max="24" step="1" />
+              <span class="range-value" id="bubble-radius-value">10</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.bubbleAlpha">透明度</div>
+              <div class="item-hint" data-i18n="general.bubbleAlphaHint">0.30 ~ 1.00</div>
+            </div>
+            <div class="range-wrap">
+              <input id="bubble-alpha" type="range" min="0.3" max="1" step="0.02" />
+              <span class="range-value" id="bubble-alpha-value">0.92</span>
+            </div>
+          </div>
+
+          <button type="button" class="section-reset" data-reset="bubble" data-i18n="general.reset">恢复默认</button>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.bubbleBackground">气泡底图</div>
+              <div class="item-hint" data-i18n="packs.bubbleBackgroundHint">九宫格拉伸；留空保持纯色气泡</div>
+            </div>
+            <select id="bubble-background"></select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.bubbleSlice">底图切片</div>
+              <div class="item-hint" data-i18n="packs.bubbleSliceHint">四角不拉伸的边长，4 ~ 64 px</div>
+            </div>
+            <input id="bubble-slice" type="number" min="4" max="64" step="1" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.font">气泡字体</div>
+              <div class="item-hint" data-i18n="packs.fontHint">选包里的 woff2 / ttf；留空用内置字体栈</div>
+            </div>
+            <select id="bubble-font"></select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.bubbleStickerSize">气泡内表情大小</div>
+              <div class="item-hint" data-i18n="general.bubbleStickerSizeHint">跟台词同排的小表情，24 ~ 160 px</div>
+            </div>
+            <div class="range-wrap">
+              <input id="bubble-stickerSize" type="range" min="24" max="160" step="4" />
+              <span class="range-value" id="bubble-stickerSize-value">64</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.sticker">气泡旁贴纸</div>
+              <div class="item-hint" data-i18n="packs.stickerHint">留空不显示；不会挡住立绘</div>
+            </div>
+            <div class="sticker-picker">
+              <select id="sticker-source"></select>
+              <button type="button" class="open-stickers" data-i18n="packs.openWindow">
+                打开表情包页
+              </button>
+              <span class="sticker-pending" id="sticker-pending" hidden></span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.autoApprove">AI 自动收表情</div>
+              <div class="item-hint" data-i18n="packs.autoApproveHint">
+                QQ 发来的图先由她判断：清楚、能认出来的直接入库，模糊或可疑的留在待审核
+              </div>
+            </div>
+            <label class="switch">
+              <input id="sticker-auto-approve" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="bubble-preview">
+            <span class="bubble-preview-label" data-i18n="general.bubblePreviewLabel">预览</span>
+            <div class="bubble-preview-balloon" id="bubble-preview-balloon">
+              <span data-i18n="general.bubblePreview">今晚想听点什么？</span>
+              <img class="bubble-preview-sticker" id="bubble-preview-sticker" alt="" hidden />
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="packs.title">素材包</h2>
+          <p class="section-note" data-i18n="packs.note">
+            一个 zip 可以同时放图标、字体、气泡底图和表情。按 emoji/ icons/ fonts/ bubbles/ 分目录会自动识别；带 pack.json 时优先读里面的声明。
+          </p>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.manage">素材包管理</div>
+              <div class="item-hint" data-i18n="packs.openWindowHint">
+                导入素材包、启用或删除、审核 QQ 发来的图，都在表情包页里
+              </div>
+            </div>
+            <button type="button" class="open-stickers" data-i18n="packs.openWindow">
+              打开表情包页
+            </button>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.trayIcon">托盘图标</div>
+              <div class="item-hint" data-i18n="packs.trayIconHint">留空用内置 Cyrene 图标；切换后立即生效</div>
+            </div>
+            <select id="icon-tray"></select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="packs.appIcon">窗口与任务栏图标</div>
+              <div class="item-hint" data-i18n="packs.appIconHint">对已经打开的窗口同样生效</div>
+            </div>
+            <select id="icon-app"></select>
+          </div>
+
+        </section>
+
+        <section class="section">
+          <h2 class="section-title" data-i18n="persona.title">人格</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.enabled">让她按这套设定说话</div>
+              <div class="item-hint" data-i18n="persona.enabledHint">关掉后只用最基础的语气</div>
+            </div>
+            <label class="switch">
+              <input id="persona-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.section.identity">身份</div>
+              <div class="item-hint" data-i18n="persona.sectionHint">留空则跟随默认；改了就整段替换</div>
+            </div>
+            <textarea id="persona-section-identity" rows="4" maxlength="1200" spellcheck="false"></textarea>
+            <div class="persona-section-foot">
+              <span class="char-count" id="persona-section-identity-count">0 / 1200</span>
+              <button type="button" class="inline-btn" id="persona-section-identity-reset" data-i18n="persona.sectionReset">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.section.lore">身世</div>
+              <div class="item-hint" data-i18n="persona.loreHint">她从哪里来、经历过什么；和世界观分开写，问到身世时照这里答</div>
+            </div>
+            <textarea id="persona-section-lore" rows="6" maxlength="1600" spellcheck="false"></textarea>
+            <div class="persona-section-foot">
+              <span class="char-count" id="persona-section-lore-count">0 / 1600</span>
+              <button type="button" class="inline-btn" id="persona-section-lore-reset" data-i18n="persona.sectionReset">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.section.worldview">世界观</div>
+              <div class="item-hint" data-i18n="persona.sectionHint">留空则跟随默认；改了就整段替换</div>
+            </div>
+            <textarea id="persona-section-worldview" rows="4" maxlength="1200" spellcheck="false"></textarea>
+            <div class="persona-section-foot">
+              <span class="char-count" id="persona-section-worldview-count">0 / 1200</span>
+              <button type="button" class="inline-btn" id="persona-section-worldview-reset" data-i18n="persona.sectionReset">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.section.lifeview">人生观</div>
+              <div class="item-hint" data-i18n="persona.sectionHint">留空则跟随默认；改了就整段替换</div>
+            </div>
+            <textarea id="persona-section-lifeview" rows="4" maxlength="1200" spellcheck="false"></textarea>
+            <div class="persona-section-foot">
+              <span class="char-count" id="persona-section-lifeview-count">0 / 1200</span>
+              <button type="button" class="inline-btn" id="persona-section-lifeview-reset" data-i18n="persona.sectionReset">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.section.values">价值观</div>
+              <div class="item-hint" data-i18n="persona.sectionHint">留空则跟随默认；改了就整段替换</div>
+            </div>
+            <textarea id="persona-section-values" rows="4" maxlength="1200" spellcheck="false"></textarea>
+            <div class="persona-section-foot">
+              <span class="char-count" id="persona-section-values-count">0 / 1200</span>
+              <button type="button" class="inline-btn" id="persona-section-values-reset" data-i18n="persona.sectionReset">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.section.manner">相处方式</div>
+              <div class="item-hint" data-i18n="persona.sectionHint">留空则跟随默认；改了就整段替换</div>
+            </div>
+            <textarea id="persona-section-manner" rows="4" maxlength="1200" spellcheck="false"></textarea>
+            <div class="persona-section-foot">
+              <span class="char-count" id="persona-section-manner-count">0 / 1200</span>
+              <button type="button" class="inline-btn" id="persona-section-manner-reset" data-i18n="persona.sectionReset">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.section.style">表达风格</div>
+              <div class="item-hint" data-i18n="persona.sectionHint">留空则跟随默认；改了就整段替换</div>
+            </div>
+            <textarea id="persona-section-style" rows="4" maxlength="1200" spellcheck="false"></textarea>
+            <div class="persona-section-foot">
+              <span class="char-count" id="persona-section-style-count">0 / 1200</span>
+              <button type="button" class="inline-btn" id="persona-section-style-reset" data-i18n="persona.sectionReset">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.extra">额外说明</div>
+              <div class="item-hint" data-i18n="persona.extraHint">追加在基础人格之后，留空表示只用默认</div>
+            </div>
+            <textarea id="persona-extra" rows="5" maxlength="2000" spellcheck="false"></textarea>
+            <div class="char-count" id="persona-count">0 / 2000</div>
+          </div>
+
+          <h3 class="sub-title" data-i18n="persona.intimacyTitle">贴近时刻</h3>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.intimacyEnabled">允许她偶尔靠近一点</div>
+              <div class="item-hint" data-i18n="persona.intimacyHint">默认关闭。只在桌面本机、有由头的时候出现；群聊和 QQ 不会触发。打开前会再确认一次。</div>
+            </div>
+            <label class="switch">
+              <input id="intimacy-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.intimacyIdle">多久没说话就散场</div>
+              <div class="item-hint" data-i18n="persona.intimacyIdleHint">1 ~ 24 小时；到点就安静回到平常，不留半场</div>
+            </div>
+            <div class="range-wrap">
+              <input id="intimacy-idle" type="range" min="1" max="24" step="1" />
+              <span class="range-value" id="intimacy-idle-value" data-i18n="persona.intimacyIdleValue">6 小时</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="persona.intimacyAftercare">余韵留多久</div>
+              <div class="item-hint" data-i18n="persona.intimacyAftercareHint">5 ~ 240 分钟；收场之后还温着的那一小段</div>
+            </div>
+            <div class="range-wrap">
+              <input id="intimacy-aftercare" type="range" min="5" max="240" step="5" />
+              <span class="range-value" id="intimacy-aftercare-value" data-i18n="persona.intimacyAftercareValue">120 分钟</span>
+            </div>
+          </div>
+
+          <h3 class="sub-title" data-i18n="persona.preview">她看到的自己</h3>
+          <pre class="preview-box" id="persona-preview">—</pre>
+        </section>
+      </div>
+
+      <!-- 状态栏 -->
+      <div class="panel" data-panel="hud">
+        <section class="section">
+          <h2 class="section-title" data-i18n="general.hud">状态栏</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.hudName">状态栏名字</div>
+              <div class="item-hint" data-i18n="general.hudNameHint">留空回落「昔涟」，最多 16 个字符</div>
+            </div>
+            <input id="hudName" type="text" maxlength="16" placeholder="昔涟" data-i18n-placeholder="general.hudNamePlaceholder" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.hudShow">显示 HUD</div>
+              <div class="item-hint" data-i18n="general.hudShowHint">在立绘上方显示一行动态信息</div>
+            </div>
+            <label class="switch">
+              <input id="showHud" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.hudDetail">详细度</div>
+              <div class="item-hint" data-i18n="general.hudDetailHint">这一行里放多少信息</div>
+            </div>
+            <select id="hudDetail">
+              <option value="compact" data-i18n="general.hudCompact">紧凑（一行余额）</option>
+              <option value="full" data-i18n="general.hudFull">完整（余额 + 模型状态）</option>
+              <option value="simple2" data-i18n="general.hudMinimal">极简（只看运行状态）</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.hudScale">整体大小</div>
+              <div class="item-hint" data-i18n="general.hudScaleHint">只改状态栏，不动桌宠窗口；75% ~ 200%</div>
+            </div>
+            <div class="range-wrap">
+              <input id="hudScale" type="range" min="0.75" max="2" step="0.05" />
+              <span class="range-value" id="hudScale-value">100%</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.hudFontScale">字体与图标大小</div>
+              <div class="item-hint" data-i18n="general.hudFontScaleHint">只改里面的文字和图标；80% ~ 140%</div>
+            </div>
+            <div class="range-wrap">
+              <input id="hudFontScale" type="range" min="0.8" max="1.4" step="0.05" />
+              <span class="range-value" id="hudFontScale-value">100%</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="general.hudAlpha">透明度</div>
+              <div class="item-hint" data-i18n="general.hudAlphaHint">0.20 ~ 1.00</div>
+            </div>
+            <div class="range-wrap">
+              <input id="hudAlpha" type="range" min="0.2" max="1" step="0.02" />
+              <span class="range-value" id="hudAlpha-value">0.90</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 连接与对话 -->
+      <div class="panel" data-panel="connection">
+        <section class="section">
+          <h2 class="section-title" data-i18n="connection.title">连接</h2>
+          <p class="section-note" data-i18n="connection.intro">
+            密钥只存进本机加密仓库，界面读回的是掩码；余额查询与聊天请求都在主进程完成，明文不进渲染层。
+          </p>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.key">API Key</div>
+              <div class="item-hint" id="deepseek-mask" data-i18n="chat.keyMissing">未配置</div>
+            </div>
+          </div>
+
+          <div class="secret-row">
+            <input
+              id="deepseek-key"
+              type="password"
+              placeholder="sk-..."
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button type="button" id="deepseek-save" data-i18n="chat.save">保存</button>
+            <button type="button" id="deepseek-clear" data-i18n="key.clear">清除</button>
+          </div>
+
+          <p class="section-note" data-i18n="chat.keyNote">
+            只存进本机加密仓库，界面读回的是掩码。余额查询与聊天请求都在主进程完成，明文不进渲染层。
+          </p>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="connection.balanceTitle">余额</h2>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="ability.moduleBalance">余额模块</div>
+              <div class="item-hint">builtin.balance · <span data-i18n="ability.moduleBalanceHint">查账户余额，使用这一页的 Key</span></div>
+            </div>
+            <label class="switch">
+              <input id="module-balance" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="connection.balanceCheck">查询余额</div>
+              <div class="item-hint" data-i18n="connection.balanceCheckHint">只在你点的时候查一次，不会定期请求</div>
+            </div>
+            <div class="inline-group">
+              <button type="button" class="inline-btn" id="balance-check" data-i18n="connection.balanceCheckBtn">查询</button>
+              <span class="diag-val" id="balance-result">—</span>
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="chat.title">聊天</h2>
+          <p class="section-note" data-i18n="chat.intro">
+            默认关闭。Key 在「连接」页填写；关闭状态下不产生任何外网请求。
+          </p>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.enabled">启用聊天</div>
+              <div class="item-hint" data-i18n="chat.enabledHint">打开后右键菜单出现「和她说话」</div>
+            </div>
+            <label class="switch">
+              <input id="chat-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.model">模型</div>
+              <div class="item-hint" data-i18n="chat.modelHint">服务端点固定，不能改成别的地址</div>
+            </div>
+            <select id="chat-model">
+              <option value="deepseek-chat">deepseek-chat</option>
+              <option value="deepseek-reasoner">deepseek-reasoner</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.maxTokens">回复上限</div>
+              <div class="item-hint" data-i18n="chat.maxTokensHint">64 ~ 8000 token</div>
+            </div>
+            <input id="chat-max-tokens" type="number" min="64" max="8000" step="64" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.test">连接自检</div>
+              <div class="item-hint" id="chat-test-result" data-i18n="chat.testHint">用已存的密钥发一次最小请求，只验通不通</div>
+            </div>
+            <button type="button" class="inline-btn" id="chat-test-btn" data-i18n="chat.testRun">测一下</button>
+            <span class="billing-hint" data-i18n="common.tokenCost">调用一次模型，消耗 token</span>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.temperature">温度</div>
+              <div class="item-hint" data-i18n="chat.temperatureHint">0 ~ 2，越高越跳脱</div>
+            </div>
+            <div class="range-wrap">
+              <input id="chat-temperature" type="range" min="0" max="2" step="0.1" />
+              <span class="range-value" id="chat-temperature-value">0.8</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.historyLimit">历史条数</div>
+              <div class="item-hint" data-i18n="chat.historyLimitHint">每次请求带多少条上文，0 表示不带</div>
+            </div>
+            <input id="chat-history-limit" type="number" min="0" max="50" step="1" placeholder="10" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="chat.wakeWords">文字唤醒</div>
+              <div class="item-hint" data-i18n="chat.wakeWordsHint">文字唤醒：群聊里叫到这些名字才接话，桌面输入框不需要唤醒词；桌面麦克风语音唤醒尚未接入。用顿号或逗号隔开，留空用默认</div>
+            </div>
+            <input id="chat-wake-words" type="text" maxlength="120" spellcheck="false" data-i18n-placeholder="chat.wakeWordsPlaceholder" placeholder="昔涟、迷迷、德谬歌、小涟" />
+          </div>
+        </section>
+      </div>
+
+      <!-- 语音与语言 -->
+      <div class="panel" data-panel="voice">
+        <section class="section">
+          <h2 class="section-title" data-i18n="voice.title">语音</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.enabled">允许出声</div>
+              <div class="item-hint" data-i18n="voice.enabledHint">关着时气泡照常显示</div>
+            </div>
+            <label class="switch">
+              <input id="voice-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.trigger">什么时候念</div>
+              <div class="item-hint" data-i18n="voice.triggerHint">只影响发声</div>
+            </div>
+            <select id="voice-trigger">
+              <option value="proactive" data-i18n="voice.triggerProactive">只在主动搭话时</option>
+              <option value="every" data-i18n="voice.triggerEvery">每条都念</option>
+              <option value="manual" data-i18n="voice.triggerManual">只在小喇叭被点时</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.quiet">免打扰时段</div>
+              <div class="item-hint" data-i18n="voice.quietHint">只影响出声；主动台词请到陪伴页单独设置，两边互不影响</div>
+            </div>
+            <label class="switch">
+              <input id="voice-quiet-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.quietRange">起止</div>
+              <div class="item-hint" data-i18n="voice.quietRangeHint">跨零点也可以，例如 22:00 → 08:00</div>
+            </div>
+            <div class="time-range">
+              <input id="voice-quiet-start" type="time" step="60" />
+              <span class="time-sep">→</span>
+              <input id="voice-quiet-end" type="time" step="60" />
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.localUrl">本地服务地址</div>
+              <div class="item-hint" data-i18n="voice.localUrlHint">默认 127.0.0.1:9880，只连本机</div>
+            </div>
+            <input id="voice-local-url" type="text" spellcheck="false" placeholder="http://127.0.0.1:9880" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.refAudio">参考音频</div>
+              <div class="item-hint" data-i18n="voice.refAudioHint">本机服务上的音色样本路径，留空就不出声</div>
+            </div>
+            <div class="inline-group">
+              <input id="voice-ref-audio" type="text" spellcheck="false" placeholder="C:\voices\reference.wav" />
+              <button type="button" class="inline-btn" id="voice-ref-audio-pick" data-i18n="voice.pickFile">选择…</button>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.preview">试听</div>
+              <div class="item-hint" data-i18n="voice.previewHint">用当前音色念一句，不会写进聊天记录</div>
+              <span id="voice-preview-text" hidden data-i18n="voice.previewText">你能听见我吗？这是人家的声音呀。</span>
+            </div>
+            <button type="button" class="inline-btn" id="voice-preview-btn" data-i18n="voice.previewPlay">试听一句</button>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.volume">音量</div>
+              <div class="item-hint" data-i18n="voice.volumeHint">只影响本机播放</div>
+            </div>
+            <div class="range-wrap">
+              <input id="voice-volume" type="range" min="0" max="1" step="0.05" />
+              <span class="range-value" id="voice-volume-value">1.00</span>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.maxChars">单条字数上限</div>
+              <div class="item-hint" data-i18n="voice.maxCharsHint">超出部分不念，避免长段独白</div>
+            </div>
+            <input id="voice-max-chars" type="number" min="10" max="500" step="10" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="voice.minInterval">最小间隔</div>
+              <div class="item-hint" data-i18n="voice.minIntervalHint">两次自动开口之间至少隔多少秒，0 表示不限</div>
+            </div>
+            <input id="voice-min-interval" type="number" min="0" max="600" step="1" />
+          </div>
+
+          <p class="section-note" id="voice-service-note" data-i18n="voice.serviceNote">
+            默认关闭。本地服务没起来时气泡照常出字，只是没有声音。
+          </p>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="language.title">语言</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="language.ui">界面语言</div>
+              <div class="item-hint" data-i18n="language.uiHint">只影响界面文案</div>
+            </div>
+            <select id="locale">
+              <option value="zh-CN" data-i18n="language.zh">简体中文</option>
+              <option value="en-US">English</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="language.role">角色说话语言</div>
+              <div class="item-hint" data-i18n="language.roleHint">她说话用的语言，跟着人格设定走</div>
+            </div>
+            <span class="value-static" data-i18n="language.roleFollow">跟随人格</span>
+          </div>
+
+          <p class="section-note" data-i18n="language.note">
+            切换后立即生效，不需要重启。界面语言不会改变她说话的语言。
+          </p>
+        </section>
+        <section class="section">
+          <h2 class="section-title">
+            <span data-i18n="wake.title">用声音叫醒</span>
+            <button type="button" class="badge-locked" id="wake-unlock-btn" data-i18n="beta.locked">内测未开放</button>
+          </h2>
+
+          <div class="item beta-locked" aria-disabled="true">
+            <div class="item-text">
+              <div class="item-label" data-i18n="wake.enabled">用声音叫醒她</div>
+              <div class="item-hint" data-i18n="wake.enabledHint">识别还没接上。现在打开只会占着麦克风，不会回应任何声音；等接上再回来开。</div>
+            </div>
+            <label class="switch">
+              <input id="wake-enabled" type="checkbox" tabindex="-1" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="wake.runtime">唤醒运行时</div>
+              <div class="item-hint" id="wake-runtime-status" data-i18n="wake.statusUnknown">正在读状态…</div>
+            </div>
+            <div class="inline-group">
+              <button type="button" class="inline-btn" id="wake-install-btn" data-i18n="wake.install">下载</button>
+              <button type="button" class="inline-btn" id="wake-remove-btn" data-i18n="wake.remove">删除</button>
+            </div>
+          </div>
+
+          <p class="section-note" data-i18n="wake.sizeNote">
+            识别引擎不随安装包发布，第一次用时才下载（几十 MB 起，装到本机数据目录）。音频只在这台电脑上处理，不会上传。
+          </p>
+        </section>
+      </div>
+
+      <!-- 主动台词 -->
+      <div class="panel" data-panel="proactive">
+        <section class="section">
+          <h2 class="section-title" data-i18n="presence.title">主动台词</h2>
+          <p class="section-note" data-i18n="presence.intro">
+            台词由 AI 结合此刻生成：电脑时间、天气、陪伴时长、记忆摘要和心情。关掉就回到本地台词池。
+          </p>
+
+          <details class="hint-more" data-hint-for="presence.intro">
+            <summary data-i18n="hint.summary">这一段在管什么</summary>
+            <div class="hint-more-body">
+              <p><strong data-i18n="hint.what">这是什么</strong><span data-i18n="hint.presence.what">她在没人说话的时候，隔一阵主动说一句话。这里决定多久说一次、说什么、要不要提天气。</span></p>
+              <p><strong data-i18n="hint.effect">改了会怎样</strong><span data-i18n="hint.presence.effect">关掉 AI 生成会退回本地短句；间隔越短越常开口；城市只影响台词里提到的天气，关掉天气就不访问外部接口。</span></p>
+              <p><strong data-i18n="hint.recommend">推荐值</strong><span data-i18n="hint.presence.recommend">先保持 AI 生成打开、间隔 30 分钟。觉得太吵就调到 60 分钟以上，嫌太安静再往下调。</span></p>
+            </div>
+          </details>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.enabled">用 AI 生成台词</div>
+              <div class="item-hint" data-i18n="presence.enabledHint">需要聊天已配置密钥；失败会自动退回本地短句</div>
+            </div>
+            <label class="switch">
+              <input id="presence-ai-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.interval">开口间隔</div>
+              <div class="item-hint" data-i18n="presence.intervalHint">分钟，1–120，改完立即生效</div>
+            </div>
+            <input id="presence-interval" type="number" min="1" max="120" step="1" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.dailyCap">每天最多主动说几句</div>
+              <div class="item-hint" data-i18n="presence.dailyCapHint">0 表示不限；你自己点她说话不算在这几次里</div>
+            </div>
+            <input id="presence-daily-cap" type="number" min="0" max="50" step="1" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.silenceDays">几天没聊就安静下来</div>
+              <div class="item-hint" data-i18n="presence.silenceDaysHint">0 表示一直等；重新聊过一句就从头算</div>
+            </div>
+            <input id="presence-silence-days" type="number" min="0" max="365" step="1" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.city">天气城市</div>
+              <div class="item-hint" data-i18n="presence.cityHint">
+                支持常见城市名；不认识的名字按默认城市取天气，不会报错
+              </div>
+            </div>
+            <input id="presence-city" type="text" maxlength="20" data-i18n-placeholder="presence.cityPlaceholder" placeholder="留空按默认城市" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.weather">把天气写进台词</div>
+              <div class="item-hint" data-i18n="presence.weatherHint">关闭后不访问外部天气接口</div>
+            </div>
+            <label class="switch">
+              <input id="presence-weather" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.screen">让我看见屏幕上的字</div>
+              <div class="item-hint" data-i18n="presence.screenHint">会读取当前屏幕的文字摘要（约十分钟一次）；只看字，不保存截图，也不上传</div>
+            </div>
+            <label class="switch">
+              <input id="presence-screen" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="presence.preview">试一句</div>
+              <div class="item-hint" data-i18n="presence.previewHint">
+                用此刻的上下文真的请求一次，结果显示在下面
+              </div>
+            </div>
+            <div class="presence-actions">
+              <button type="button" id="presence-preview" data-i18n="presence.preview">试一句</button>
+            </div>
+          </div>
+
+          <p class="section-note" id="presence-preview-output" aria-live="polite"></p>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="quiet.title">夜间不扰</h2>
+          <p class="section-note" data-i18n="quiet.intro">
+            统一管理这段时间里的主动台词、自动朗读与状态栏。语音页的免打扰仍然独立生效，作为额外的静音时段。时间按本机时区算，跨零点也能识别。
+          </p>
+
+          <details class="hint-more" data-hint-for="quiet.intro">
+            <summary data-i18n="hint.summary">这一段在管什么</summary>
+            <div class="hint-more-body">
+              <p><strong data-i18n="hint.what">这是什么</strong><span data-i18n="hint.quiet.what">一段你休息或专注的时间，她在这段时间里自动降低存在感。</span></p>
+              <p><strong data-i18n="hint.effect">改了会怎样</strong><span data-i18n="hint.quiet.effect">关掉后时段会保留但不生效；只关搭话会保留定时提醒，降频会把间隔拉长到 3 倍，完全静音连提醒也不发。</span></p>
+              <p><strong data-i18n="hint.recommend">推荐值</strong><span data-i18n="hint.quiet.recommend">23:00 到次日 08:00，选「只关搭话，保留提醒」。午休需要清净就再单独调一次。</span></p>
+            </div>
+          </details>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="quiet.enabled">开启夜间不扰</div>
+              <div class="item-hint" data-i18n="quiet.enabledHint">关掉后时段会保留，但不会生效</div>
+            </div>
+            <label class="switch">
+              <input id="quiet-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="quiet.range">安静时段</div>
+              <div class="item-hint" data-i18n="quiet.rangeHint">开始时间含、结束时间不含；起点晚于终点按跨零点处理</div>
+            </div>
+            <div class="time-range">
+              <input id="quiet-from" type="time" step="60" />
+              <span class="time-sep" aria-hidden="true">–</span>
+              <input id="quiet-to" type="time" step="60" />
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="quiet.mode">安静方式</div>
+              <div class="item-hint" data-i18n="quiet.modeHint">
+                「保留提醒」只留下你自己设定的定时提醒，比如每日巡视
+              </div>
+            </div>
+            <select id="quiet-mode">
+              <option value="urgentOnly" data-i18n="quiet.modeUrgentOnly">只关搭话，保留提醒</option>
+              <option value="reduce" data-i18n="quiet.modeReduce">降频：间隔拉长到 3 倍</option>
+              <option value="silent" data-i18n="quiet.modeSilent">完全静音：连提醒也不发</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="quiet.hideHud">时段内隐藏状态栏</div>
+              <div class="item-hint" data-i18n="quiet.hideHudHint">
+                只影响显示，结束后自动恢复；不会改动通用页的显示开关
+              </div>
+            </div>
+            <label class="switch">
+              <input id="quiet-hide-hud" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+        </section>
+      </div>
+
+      <!-- 她的一天 -->
+      <div class="panel" data-panel="routine">
+        <section class="section">
+          <h2 class="section-title" data-i18n="companion.agendaTitle">今日日程</h2>
+          <p class="section-note" data-i18n="companion.agendaHint">
+            她按自己的节奏安排一天。聊得太久、打断了手头的事，可以把后面的安排整体顺延。
+          </p>
+          <div class="item-hint" id="companion-agenda-note" data-i18n="companion.agendaEmpty">尚未生成今天的日程</div>
+          <div class="model-actions">
+            <button type="button" id="companion-agenda-refresh" data-i18n="companion.agendaRefresh">刷新</button>
+            <button type="button" id="companion-agenda-delay" data-i18n="companion.agendaDelay">往后挪 30 分钟</button>
+            <button type="button" id="companion-agenda-open" data-i18n="companion.agendaOpen">在观察台里看</button>
+          </div>
+          <div class="item-hint" id="companion-agenda-status"></div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="companion.title">陪伴任务</h2>
+          <p class="section-note" data-i18n="companion.intro">
+            每天睡前自动复盘一次当天，产出次日的调整建议。默认关闭；打开后能看到真实的运行状态。
+          </p>
+
+          <details class="hint-more" data-hint-for="companion.intro">
+            <summary data-i18n="hint.summary">这一段在管什么</summary>
+            <div class="hint-more-body">
+              <p><strong data-i18n="hint.what">这是什么</strong><span data-i18n="hint.companion.what">到点自动跑一次的小任务：复盘当天，或把被打断的日程往后顺延。</span></p>
+              <p><strong data-i18n="hint.effect">改了会怎样</strong><span data-i18n="hint.companion.effect">默认关闭；打开后到点真的跑一次，需要聊天已配置密钥。</span></p>
+              <p><strong data-i18n="hint.recommend">推荐值</strong><span data-i18n="hint.companion.recommend">只开「每日终盘巡视」，时间放在睡前；先看一次真实结果，再决定要不要长期开。</span></p>
+            </div>
+          </details>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="companion.dailyReview">每日终盘巡视</div>
+              <div class="item-hint" data-i18n="companion.dailyReviewHint">复盘当天的表现，产出次日的调整建议</div>
+            </div>
+            <label class="switch">
+              <input id="care-daily-review-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="companion.time">时刻</div>
+              <div class="item-hint" data-i18n="companion.timeHint">24 小时制，错过不补跑</div>
+            </div>
+            <input id="care-daily-review-at" type="time" step="60" />
+          </div>
+
+          <div class="diag-grid care-status">
+            <span class="diag-key" data-i18n="companion.lastRun">上次运行</span>
+            <span class="diag-val" id="care-last-run">—</span>
+            <span class="diag-key" data-i18n="companion.nextRun">下次运行</span>
+            <span class="diag-val" id="care-next-run">—</span>
+            <span class="diag-key" data-i18n="companion.lastResult">最近结果</span>
+            <span class="diag-val" id="care-last-result" data-i18n="common.notRun">尚未运行</span>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="companion.budget">每天最多花多少</div>
+              <div class="item-hint" data-i18n="companion.budgetHint">按 token 计；0 表示不限。用完当天就不再调用模型</div>
+            </div>
+            <label class="switch">
+              <input id="care-budget-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="companion.budgetLimit">上限（token）</div>
+              <div class="item-hint" data-i18n="companion.budgetLimitHint">只影响聊天与主动开口，不影响本地功能</div>
+            </div>
+            <input id="care-budget-limit" type="number" min="0" step="1000" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="companion.guard">别让她太忙</div>
+              <div class="item-hint" data-i18n="companion.guardHint">短时间被很多人叫时，她会先缓一缓再回，不至于越说越乱</div>
+            </div>
+            <label class="switch">
+              <input id="care-guard-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="companion.guardLimit">一分钟最多回几次</div>
+              <div class="item-hint" data-i18n="companion.guardLimitHint">默认 20 次，平时聊天基本碰不到</div>
+            </div>
+            <input id="care-guard-per-minute" type="number" min="1" max="120" step="1" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="companion.offline">没接上时也说一句</div>
+              <div class="item-hint" data-i18n="companion.offlineHint">网络或模型暂时不通时，先用一句本地的话接住，不留下空白</div>
+            </div>
+            <label class="switch">
+              <input id="care-offline-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="emo.title">情绪与反思</h2>
+          <p class="section-note" data-i18n="emo.note">
+            这些是表现层的近似状态，只影响她怎么开口，不代表真实感受；数据只留在本机。
+          </p>
+
+          <details class="hint-more" data-hint-for="emo.note">
+            <summary data-i18n="hint.summary">这一段在管什么</summary>
+            <div class="hint-more-body">
+              <p><strong data-i18n="hint.what">这是什么</strong><span data-i18n="hint.emo.what">情绪只影响她说话的语气，不代表真实感受；下面的按钮会带你去看真实结果。</span></p>
+              <p><strong data-i18n="hint.effect">改了会怎样</strong><span data-i18n="hint.emo.effect">「立即巡视」用当前情绪跑一次，「生成今日反思」把今天的对话整理成一段反思；结果都来自本机。</span></p>
+              <p><strong data-i18n="hint.recommend">推荐值</strong><span data-i18n="hint.emo.recommend">先点一次「立即巡视」，看看结果是否符合你的感觉，再决定要不要每天跑。</span></p>
+            </div>
+          </details>
+
+          <div class="model-actions">
+            <button type="button" id="daily-run" data-i18n="emo.dailyRun">立即巡视一次</button>
+            <span class="billing-hint" data-i18n="common.tokenCost">调用一次模型，消耗 token</span>
+            <button type="button" id="reflection-run" data-i18n="emo.reflectionRun">生成今日反思</button>
+            <span class="billing-hint" data-i18n="common.tokenCost">调用一次模型，消耗 token</span>
+          </div>
+          <div class="daily-result" id="daily-result" data-i18n="common.notRun">尚未运行</div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="emo.afterglow">说完话后，心情慢慢回落</div>
+              <div class="item-hint" data-i18n="emo.afterglowHint">不会让一张表情在下一句就突然归零</div>
+            </div>
+            <label class="switch">
+              <input id="emotion-afterglow-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="emo.afterglowHalfLife">回落需要多久</div>
+              <div class="item-hint" data-i18n="emo.afterglowHalfLifeHint">分钟；时间越短，情绪散得越快</div>
+            </div>
+            <input id="emotion-afterglow-half-life" type="number" min="1" max="720" step="5" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="emo.expressionGroup">表情跟着心情走</div>
+              <div class="item-hint" data-i18n="emo.expressionGroupHint">关闭时保持原来的选法；「只记录」不会真的换表情</div>
+            </div>
+            <select id="emotion-expression-group">
+              <option value="off" data-i18n="emo.expressionOff">关闭</option>
+              <option value="experiment" data-i18n="emo.expressionOn">跟随心情</option>
+              <option value="control" data-i18n="emo.expressionControl">只记录，不改变</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="emo.needsSwitch">她也会累</div>
+              <div class="item-hint" data-i18n="emo.needsSwitchHint">连着聊太久时，主动开口会少一点</div>
+            </div>
+            <label class="switch">
+              <input id="emotion-needs-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+        </section>
+      </div>
+
+      <!-- 记忆 -->
+      <div class="panel" data-panel="memory">
+        <section class="section">
+          <h2 class="section-title" data-i18n="memory.title">记忆</h2>
+          <p class="section-note" data-i18n="memory.intro">
+            默认关闭。开启后对话会被压缩成条目存进本机加密仓库，关掉后不再记录，已有内容保留。
+          </p>
+
+          <details class="hint-more" data-hint-for="memory.intro">
+            <summary data-i18n="hint.summary">这一段在管什么</summary>
+            <div class="hint-more-body">
+              <p><strong data-i18n="hint.what">这是什么</strong><span data-i18n="hint.memory.what">把对话压缩成条目存进本机加密仓库，让她之后还能记得你说过的事。</span></p>
+              <p><strong data-i18n="hint.effect">改了会怎样</strong><span data-i18n="hint.memory.effect">关掉后不再记录新内容，已经存下的保留；记录开启后会按天衰减权重，很久没提起的会慢慢变淡。</span></p>
+              <p><strong data-i18n="hint.recommend">推荐值</strong><span data-i18n="hint.memory.recommend">先开着记录，保留默认的条数与衰减。觉得记太多就在下面按关键词清理单条。</span></p>
+            </div>
+          </details>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="memory.enabled">记录对话</div>
+              <div class="item-hint" data-i18n="memory.enabledHint">关着时每次对话都不落盘</div>
+            </div>
+            <label class="switch">
+              <input id="memory-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="memory.maxItems">最多保留</div>
+              <div class="item-hint" data-i18n="memory.maxItemsHint">超出后按权重淘汰旧条目</div>
+            </div>
+            <input id="memory-max-items" type="number" min="50" max="10000" step="50" />
+          </div>
+
+          <div class="diag-grid">
+            <span class="diag-key" data-i18n="memory.count">条目数</span>
+            <span class="diag-val" id="memory-count">—</span>
+            <span class="diag-key" data-i18n="memory.updated">最近整理</span>
+            <span class="diag-val" id="memory-updated">—</span>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="memory.search">搜索</div>
+              <div class="item-hint" data-i18n="memory.searchHint">按关键词过滤，留空显示全部</div>
+            </div>
+            <input id="memory-search" type="search" data-i18n-placeholder="memory.searchPlaceholder" placeholder="关键词" />
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="memory.filterRole">来源</div>
+              <div class="item-hint" data-i18n="memory.filterRoleHint">按说话人筛选；默认全部</div>
+            </div>
+            <select id="memory-role">
+              <option value="" data-i18n="memory.roleAll">全部</option>
+              <option value="user" data-i18n="memory.roleUser">我说的</option>
+              <option value="assistant" data-i18n="memory.roleAssistant">她说的</option>
+            </select>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="memory.filterTime">时间范围</div>
+              <div class="item-hint" data-i18n="memory.filterTimeHint">
+                按条目记录时间筛选；留空表示不限，时间未知的条目不会出现在时间筛选里。
+              </div>
+            </div>
+            <div class="model-actions">
+              <input id="memory-from" type="date" />
+              <span>—</span>
+              <input id="memory-to" type="date" />
+            </div>
+          </div>
+          <div class="item item-stack">
+            <div class="item-text">
+              <div class="item-label" data-i18n="memory.factsTitle">她记住的事</div>
+              <div class="item-hint" data-i18n="memory.factsHint">
+                偏好、人物、项目、约定。反复提到会变牢，久没提起会变淡并归档。
+              </div>
+            </div>
+            <div class="diag-grid">
+              <span class="diag-key" data-i18n="memory.factsActive">还记得</span>
+              <span class="diag-val" id="memory-facts-active">—</span>
+              <span class="diag-key" data-i18n="memory.factsArchived">已归档</span>
+              <span class="diag-val" id="memory-facts-archived">—</span>
+            </div>
+            <div class="model-actions">
+              <button type="button" id="memory-facts-export" data-i18n="memory.factsExport">导出</button>
+              <button type="button" id="memory-facts-import" data-i18n="memory.factsImport">导入</button>
+            </div>
+            <div class="item-hint" id="memory-facts-status"></div>
+            <div class="memory-filters">
+              <label class="memory-filter">
+                <span data-i18n="memory.factScope">来源</span>
+                <select id="memory-facts-scope">
+                  <option value="all" data-i18n="memory.factScopeAll">全部</option>
+                  <option value="desktop" data-i18n="memory.factScopeDesktop">桌面</option>
+                  <option value="qq" data-i18n="memory.factScopeQq">QQ</option>
+                </select>
+              </label>
+              <label class="memory-filter">
+                <span data-i18n="memory.factKind">分类</span>
+                <select id="memory-facts-kind">
+                  <option value="" data-i18n="memory.factKindAll">全部</option>
+                  <option value="lesson" data-i18n="memory.factKindLesson">被纠正过</option>
+                  <option value="preference" data-i18n="memory.factKindPreference">偏好</option>
+                  <option value="person" data-i18n="memory.factKindPerson">人物</option>
+                  <option value="project" data-i18n="memory.factKindProject">项目</option>
+                  <option value="promise" data-i18n="memory.factKindPromise">约定</option>
+                </select>
+              </label>
+            </div>
+            <div class="memory-list" id="memory-facts-list" data-i18n="common.notLoaded">尚未加载</div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="memory.content">记忆内容</div>
+              <div class="item-hint" data-i18n="memory.contentHint">最新在前。删除只作用于本机加密仓库，不可恢复。</div>
+            </div>
+            <div class="model-actions">
+              <button type="button" id="memory-refresh" data-i18n="memory.refresh">刷新</button>
+              <button type="button" id="memory-export" data-i18n="memory.export">导出</button>
+              <button type="button" id="memory-open-insight" data-i18n="memory.openInsight">在观察台里看</button>
+            </div>
+          </div>
+          <div class="item-hint" id="memory-export-status" data-i18n="memory.exportHint">导出为明文文件，请自行保管。</div>
+          <div class="memory-list" id="memory-list" data-i18n="common.notLoaded">尚未加载</div>
+          <div class="model-actions">
+            <button type="button" id="memory-prev" data-i18n="memory.prev">上一页</button>
+            <button type="button" id="memory-next" data-i18n="memory.next">下一页</button>
+            <span class="diag-val" id="memory-page">—</span>
+          </div>
+        </section>
+      </div>
+
+      <!-- 能力 -->
+      <div class="panel" data-panel="ability">
+        <section class="section">
+          <h2 class="section-title" data-i18n="ability.modules">模块</h2>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="ability.bubble">气泡模块</div>
+              <div class="item-hint">builtin.bubble · <span data-i18n="ability.bubbleHint">关掉后气泡立即消失</span></div>
+            </div>
+            <label class="switch">
+              <input id="module-bubble" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="ability.reminder">提醒模块</div>
+              <div class="item-hint">builtin.reminder · <span data-i18n="ability.reminderHint">启动时写一条启动记录</span></div>
+            </div>
+            <label class="switch">
+              <input id="module-reminder" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <p class="section-note" data-i18n="ability.moduleNote">
+            开关写入 settings.modules，下次启动时按它决定是否 bootstrap。气泡关闭是即时生效的。
+          </p>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="ability.center">能力中心</h2>
+          <p class="section-note" data-i18n="ability.centerNote">
+            打开后有猜拳、素材库、记忆、语音、余额、每日巡视与反思；没接通的项会标明，不做假入口。
+          </p>
+          <div class="model-actions">
+            <button type="button" id="open-ability-center" data-i18n="ability.open">打开能力中心</button>
+          </div>
+        </section>
+        <section class="section" id="game-entry">
+          <h2 class="section-title" data-i18n="game.title">游戏</h2>
+          <p class="section-note" data-i18n="game.movedNote">
+            排班、周常任务、检测和运行记录已经搬到独立的游戏页。这里只留一个入口，不再逐项铺开。
+          </p>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="game.statusLabel">游戏日常</div>
+              <div class="item-hint" id="game-entry-status" data-i18n="gamePage.loading">读取中…</div>
+            </div>
+            <div class="inline-group">
+              <button type="button" class="inline-btn" id="open-game-page" data-i18n="game.openPage">
+                打开游戏页
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 账号 -->
+      <div class="panel" data-panel="account">
+        <section class="section" id="qq-section">
+          <h2 class="section-title" data-i18n="qq.title">QQ 机器人（远程拍板）</h2>
+          <p class="section-note" data-i18n="qq.intro">
+            默认走 WebSocket 网关，不需要公网回调；AppSecret 只存本机加密仓库。2025-04-21 后官方不再支持主动推送，回复会带上入站 msg_id 作为被动回复。
+          </p>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.runtime">运行状态</div>
+              <div class="item-hint" id="qq-runtime-detail">—</div>
+            </div>
+            <span class="diag-val" id="qq-runtime-state">—</span>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.enabled">启用 QQ 通道</div>
+              <div class="item-hint" data-i18n="qq.enabledHint">关闭时不建立任何 QQ 连接</div>
+            </div>
+            <label class="switch">
+              <input id="qq-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.imitateFormat">跟着群里的格式说话</div>
+              <div class="item-hint" data-i18n="qq.imitateFormatHint">学习大家分几条发、常不常 @ 人、爱不爱发表情包；关掉后只保留自己的语气</div>
+            </div>
+            <label class="switch">
+              <input id="qq-imitate-format" type="checkbox" />
+              <span class="knob"></span>
+            </label>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.transport">传输方式</div>
+              <div class="item-hint" data-i18n="qq.transportHint">网关不需要公网地址；webhook 需要公网回调与验签公钥</div>
+            </div>
+            <select id="qq-transport">
+              <option value="gateway" data-i18n="qq.transportGateway">WebSocket 网关</option>
+              <option value="webhook" data-i18n="qq.transportWebhook">Webhook 回调</option>
+            </select>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.appId">AppID</div>
+            </div>
+            <input id="qq-app-id" type="text" autocomplete="off" spellcheck="false" placeholder="102xxxxxx" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.secret">AppSecret</div>
+              <div class="item-hint" id="qq-secret-mask" data-i18n="qq.secretMissing">未配置</div>
+            </div>
+          </div>
+
+          <div class="secret-row">
+            <input id="qq-secret" type="password" autocomplete="off" spellcheck="false" placeholder="AppSecret" />
+            <button type="button" id="qq-secret-save" data-i18n="chat.save">保存</button>
+            <button type="button" id="qq-secret-clear" data-i18n="key.clear">清除</button>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.owners">主人 openid</div>
+              <div class="item-hint" data-i18n="qq.ownersHint">逗号或换行分隔；不在名单里的消息不能拍板</div>
+            </div>
+          </div>
+          <textarea id="qq-owners" rows="2" spellcheck="false" placeholder="openid-1, openid-2"></textarea>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.lastInbound">最近收到的消息</div>
+              <div class="item-hint" id="qq-last-inbound" data-i18n="qq.lastInboundEmpty">还没收到消息，先在 QQ 里给机器人发一条</div>
+            </div>
+            <div class="inline-group">
+              <button type="button" class="inline-btn" id="qq-bind-owner" data-i18n="qq.bindOwner">设为我的 openid</button>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.target">默认投递 openid</div>
+              <div class="item-hint" data-i18n="qq.targetHint">留空时回复最近一次入站会话</div>
+            </div>
+            <input id="qq-target" type="text" autocomplete="off" spellcheck="false" placeholder="123456789" />
+          </div>
+
+          <div class="item qq-webhook-only" data-qq-webhook-only hidden>
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.publicKey">Ed25519 公钥</div>
+              <div class="item-hint" data-i18n="qq.publicKeyHint">仅 webhook 模式使用</div>
+            </div>
+          </div>
+          <textarea id="qq-public-key" class="qq-webhook-only" data-qq-webhook-only rows="2" spellcheck="false" placeholder="-----BEGIN PUBLIC KEY-----" hidden></textarea>
+
+          <div class="item qq-webhook-only" data-qq-webhook-only hidden>
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.port">Webhook 端口</div>
+              <div class="item-hint" data-i18n="qq.portHint">只监听 127.0.0.1</div>
+            </div>
+            <input id="qq-port" type="number" min="1" max="65535" step="1" placeholder="5700" />
+          </div>
+
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="qq.test">连接测试</div>
+              <div class="item-hint" data-i18n="qq.testHint">只取 token 与网关地址，不发送消息</div>
+            </div>
+            <div class="inline-group">
+              <button type="button" class="inline-btn" id="qq-test" data-i18n="qq.testBtn">测试</button>
+              <span class="diag-val" id="qq-test-result">—</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 数据与运行 -->
+      <div class="panel" data-panel="data">
+        <section class="section">
+          <h2 class="section-title" data-i18n="status.title">运行状态</h2>
+          <p class="section-note" data-i18n="status.preflightNote">启动前体检只汇总本地状态，不联网、不计费；拿不到的项写「不可用」。</p>
+          <div class="status-cards">
+            <div class="status-card">
+              <div class="status-card-label" data-i18n="status.cardQq">QQ</div>
+              <div class="status-card-value" id="status-card-qq" data-tone="off">—</div>
+              <div class="status-card-note" id="status-card-qq-note"></div>
+            </div>
+            <div class="status-card">
+              <div class="status-card-label" data-i18n="status.cardMemory">记忆</div>
+              <div class="status-card-value" id="status-card-memory">—</div>
+              <div class="status-card-note" id="status-card-memory-note"></div>
+            </div>
+            <div class="status-card">
+              <div class="status-card-label" data-i18n="status.cardProactive">今天主动</div>
+              <div class="status-card-value" id="status-card-proactive">—</div>
+              <div class="status-card-note" id="status-card-proactive-note"></div>
+            </div>
+            <div class="status-card">
+              <div class="status-card-label" data-i18n="status.cardReflection">上次反思</div>
+              <div class="status-card-value" id="status-card-reflection">—</div>
+              <div class="status-card-note" id="status-card-reflection-note"></div>
+            </div>
+          </div>
+          <div class="model-actions">
+            <button type="button" id="preflight-refresh" data-i18n="status.recheck">重新检查</button>
+            <button type="button" id="diagnostics-copy" data-i18n="status.copyDiag">复制诊断</button>
+          </div>
+          <div class="diag-grid">
+            <span class="diag-key" data-i18n="status.chat">聊天</span><span class="diag-val" id="preflight-chat">—</span>
+            <span class="diag-key" data-i18n="status.models">模型</span><span class="diag-val" id="preflight-models">—</span>
+            <span class="diag-key" data-i18n="status.secret">密钥</span><span class="diag-val" id="preflight-secret">—</span>
+            <span class="diag-key" data-i18n="status.voiceShort">语音</span><span class="diag-val" id="preflight-voice">—</span>
+            <span class="diag-key" data-i18n="status.disk">磁盘</span><span class="diag-val" id="preflight-disk">—</span>
+            <span class="diag-key" data-i18n="status.vault">加密仓库</span><span class="diag-val" id="preflight-vault">—</span>
+            <span class="diag-key" data-i18n="status.memory">记忆</span><span class="diag-val" id="preflight-memory">—</span>
+          </div>
+          <div class="diag-grid">
+            <span class="diag-key" data-i18n="status.version">版本</span><span class="diag-val" id="diag-version">—</span>
+            <span class="diag-key" data-i18n="status.window">窗口</span><span class="diag-val" id="diag-size">—</span>
+            <span class="diag-key" data-i18n="status.media">素材</span><span class="diag-val" id="diag-media">—</span>
+            <span class="diag-key" data-i18n="status.frames">帧数</span><span class="diag-val" id="diag-frames">—</span>
+            <span class="diag-key" data-i18n="status.hit">点击</span><span class="diag-val" id="diag-hit">—</span>
+            <span class="diag-key" data-i18n="status.modules">模块</span><span class="diag-val" id="diag-modules">—</span>
+            <span class="diag-key" data-i18n="status.voice">语音服务</span><span class="diag-val" id="diag-voice">—</span>
+          </div>
+          <p class="section-note" data-i18n="status.note">
+            这里显示的是实际读数。没有运行过的功能会明确写「尚未运行」，不会假装正常。
+          </p>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="backup.title">加密备份</h2>
+          <p class="section-note" data-i18n="backup.note">
+            备份包含密钥、密钥库与聊天记忆，全部用你的口令重新加密。换电脑后导入即可恢复；口令丢失无法找回。
+          </p>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="backup.password">备份口令</div>
+              <div class="item-hint" data-i18n="backup.passwordHint">至少 8 位，建议 12 位以上；不写入设置文件，丢失后无法找回</div>
+            </div>
+            <input id="backup-password" type="password" minlength="8" autocomplete="new-password" data-i18n-placeholder="backup.passwordPlaceholder" placeholder="建议 12 位以上" />
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="backup.dir">备份目录</div>
+              <div class="item-hint" id="backup-dir-hint" data-i18n="backup.dirHint">未选择时落到文档目录</div>
+            </div>
+            <button type="button" id="backup-choose-dir" data-i18n="backup.chooseDir">选择目录</button>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="backup.keep">保留份数</div>
+              <div class="item-hint" data-i18n="backup.keepHint">只保留最近 N 份，超出的按时间删除</div>
+            </div>
+            <input id="backup-keep" type="number" min="1" max="100" step="1" value="5" />
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="backup.auto">自动备份</div>
+              <div class="item-hint" data-i18n="backup.autoHint">开启后按间隔自动生成一份；口令用系统密钥加密保存在本机，只在本机有效</div>
+            </div>
+            <input id="backup-auto-enabled" type="checkbox" />
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="backup.autoInterval">间隔天数</div>
+              <div class="item-hint" id="backup-auto-status" data-i18n="backup.autoOff">自动备份未开启</div>
+            </div>
+            <input id="backup-auto-days" type="number" min="1" max="365" step="1" value="7" />
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="backup.latest">最近一份备份</div>
+              <div class="item-hint" id="backup-latest-hint" data-i18n="backup.latestNone">还没有找到备份文件</div>
+            </div>
+          </div>
+          <div class="model-actions">
+            <button type="button" id="backup-run" data-i18n="backup.run">立即备份</button>
+            <button type="button" id="backup-export" data-i18n="backup.exportAs">另存为…</button>
+            <button type="button" id="backup-import" data-i18n="backup.import">导入备份</button>
+          </div>
+          <div class="danger-zone">
+            <div class="danger-title" data-i18n="backup.dangerTitle">危险操作</div>
+            <p class="section-note" data-i18n="backup.dangerNote">轮换只换后续写入用的钥，旧记录照旧可读；旧备份也仍能用原口令打开，但导入会连密钥环一起覆盖，轮换之后写的数据会读不出来。导入前先导出一份新备份。</p>
+            <button type="button" id="backup-rotate" class="danger-btn" data-i18n="backup.rotate">轮换密钥</button>
+          </div>
+          <div class="diag-grid">
+            <span class="diag-key" data-i18n="backup.keyring">密钥环</span><span class="diag-val" id="backup-keyring">—</span>
+            <span class="diag-key" data-i18n="backup.status">备份状态</span><span class="diag-val" id="backup-status" data-i18n="common.notRun">尚未运行</span>
+            <span class="diag-key" data-i18n="backup.rotateStatus">密钥轮换</span><span class="diag-val" id="rotate-status" data-i18n="backup.notRotated">尚未轮换</span>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="sync.title">同步</h2>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="sync.dir">同步目录</div>
+              <div class="item-hint" id="sync-dir-path" data-i18n="sync.dirHint">两台机器指到同一个共享目录，就能交换偏好</div>
+            </div>
+            <button type="button" class="inline-btn" id="sync-dir-btn" data-i18n="sync.dirChoose">选择目录</button>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-hint" id="sync-last-export" data-i18n="sync.historyEmpty">还没有记录</div>
+              <div class="item-hint" id="sync-last-pull" data-i18n="sync.historyEmpty">还没有记录</div>
+            </div>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="sync.export">导出同步包</div>
+              <div class="item-hint" data-i18n="sync.exportHint">把可同步的偏好写成一份快照，放在本机同步目录</div>
+            </div>
+            <button type="button" class="inline-btn" id="sync-export-btn" data-i18n="sync.exportRun">导出</button>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="sync.apply">应用对端变更</div>
+              <div class="item-hint" id="sync-result" data-i18n="sync.applyHint">读取同步目录里的变更，按时间合并进本机设置</div>
+            </div>
+            <button type="button" class="inline-btn" id="sync-apply-btn" data-i18n="sync.applyRun">应用</button>
+          </div>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="sync.passphrase">同步口令</div>
+              <div class="item-hint" data-i18n="sync.passphraseHint">给同步包里的敏感字段加密。两台机器要输入同一口令，否则解不开。</div>
+            </div>
+            <div class="inline-group">
+              <input id="sync-passphrase" type="password" autocomplete="new-password" minlength="8" data-i18n-placeholder="sync.passphrasePlaceholder" placeholder="至少 8 位" />
+              <button type="button" class="inline-btn" id="sync-passphrase-save" data-i18n="sync.passphraseSave">保存</button>
+              <button type="button" class="inline-btn" id="sync-passphrase-clear" data-i18n="sync.passphraseClear">清除</button>
+            </div>
+          </div>
+          <div class="item">
+            <div class="item-hint" id="sync-passphrase-status" data-i18n="sync.passphraseNotSet">未设置 · 敏感字段不会进同步包</div>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="data.chatTitle">聊天记录</h2>
+          <div class="item">
+            <div class="item-text">
+              <div class="item-label" data-i18n="data.chatExport">导出为 Markdown</div>
+              <div class="item-hint" data-i18n="data.chatExportHint">导出当前会话，不改动记录</div>
+            </div>
+            <button type="button" class="inline-btn" id="chat-export" data-i18n="data.chatExportRun">导出</button>
+          </div>
+          <div class="item-hint" id="chat-data-status" data-i18n="data.chatReady">尚未导出</div>
+          <div class="danger-zone">
+            <div class="danger-title" data-i18n="data.chatDanger">危险操作</div>
+            <p class="section-note" data-i18n="data.chatClearHint">清空后不可恢复；建议先导出。</p>
+            <button type="button" id="chat-clear" class="danger-btn" data-i18n="data.chatClearRun">清空聊天记录</button>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="data.resetAllTitle">重置全部设置</h2>
+          <p class="section-note" data-i18n="data.resetAllNote">只把昵称、外观、气泡、立绘、语音、记忆与人格这些可编辑项恢复默认；主题、界面语言和模块开关保持不变。</p>
+          <div class="danger-zone">
+            <div class="danger-title" data-i18n="data.chatDanger">危险操作</div>
+            <button type="button" id="reset-all-settings" class="danger-btn" data-i18n="data.resetAllRun">重置全部设置</button>
+          </div>
+        </section>
+        <section class="section">
+          <h2 class="section-title" data-i18n="data.factoryTitle">恢复出厂设置</h2>
+          <p class="section-note" data-i18n="data.factoryNote">会清空设置、记忆、聊天记录、API Key、QQ 配置和引导进度，应用会关闭并重新打开，再走一遍初次引导。已导出的备份文件和导入的素材不会被删除。</p>
+          <div class="danger-zone">
+            <div class="danger-title" data-i18n="data.chatDanger">危险操作</div>
+            <button type="button" id="factory-reset" class="danger-btn" data-i18n="data.factoryRun">恢复出厂设置</button>
+          </div>
+        </section>
+      </div>
+
+    </main>
+
+    <footer class="s-foot">
+      <span class="saved-tip" id="saved-tip" role="status" aria-live="polite" data-i18n="foot.saved">已保存</span>
+      <span class="saved-tip is-pending" id="pending-tip" role="status" aria-live="polite" hidden data-i18n="foot.pending">有填写未提交 · 关窗会丢</span>
+      <button type="button" id="close-btn" data-i18n="foot.close">关闭</button>
+    </footer>
+
+    <div class="s-toast" id="settings-toast" role="status" aria-live="polite" hidden></div>
+
+    <script src="./backup-policy.js"></script>
+    <script src="./i18n.js"></script>
+    <script src="./reason-text.js"></script>
+    <script src="./settings-search.js"></script>
+    <script src="./settings.js"></script>
+  </body>
+</html>

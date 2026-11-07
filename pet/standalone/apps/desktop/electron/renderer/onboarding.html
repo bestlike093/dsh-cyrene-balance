@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:"
+    />
+    <title data-i18n="onboard.title">第一次见面</title>
+    <script src="theme-boot.js"></script>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="onboarding.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="head">
+        <div class="dots" id="dots">
+          <span class="dot is-active"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+        <button type="button" class="link" id="close" data-i18n="onboard.later">稍后再说</button>
+      </header>
+
+      <main class="stage" id="stage">
+        <!-- 1. 称呼 -->
+        <section class="step is-active">
+          <h1 data-i18n="onboard.step1Title">先认识一下</h1>
+          <p class="lead" data-i18n="onboard.step1Lead">
+            你想让人家怎么称呼你？填了会用在气泡里。不想填也没关系，之后在设置里补也一样。
+          </p>
+          <input
+            id="nickname"
+            class="text"
+            type="text"
+            maxlength="24"
+            data-i18n-placeholder="onboard.nicknamePlaceholder"
+            placeholder="怎么称呼你"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <p class="note" data-i18n="onboard.localOnly">名字只留在本机，不会上传。</p>
+        </section>
+
+        <!-- 2. 语音 -->
+        <section class="step">
+          <h1 data-i18n="onboard.step2Title">要不要出声</h1>
+          <p class="lead" data-i18n="onboard.step2Lead">
+            默认是安静的。开着的时候，我会把气泡里的话念出来；夜里会自动收声，不打扰你休息。
+          </p>
+
+          <label class="row">
+            <span class="row-label" data-i18n="onboard.voiceAllow">允许出声</span>
+            <span class="switch">
+              <input id="voice-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </span>
+          </label>
+
+          <label class="row">
+            <span class="row-label" data-i18n="onboard.voiceWhen">什么时候念</span>
+            <select id="voice-trigger" class="select">
+              <option value="proactive" data-i18n="onboard.voiceProactive">只在主动搭话时</option>
+              <option value="every" data-i18n="onboard.voiceEvery">每条都念</option>
+              <option value="manual" data-i18n="onboard.voiceManual">只在我点小喇叭时</option>
+            </select>
+          </label>
+
+          <label class="row">
+            <span class="row-label" data-i18n="onboard.quiet">免打扰</span>
+            <span class="switch">
+              <input id="quiet-enabled" type="checkbox" />
+              <span class="knob"></span>
+            </span>
+          </label>
+
+          <div class="row time-row">
+            <input id="quiet-start" type="time" step="60" />
+            <span class="sep">→</span>
+            <input id="quiet-end" type="time" step="60" />
+          </div>
+
+          <p class="note" data-i18n="onboard.quietNote">跨零点也可以，比如 22:00 → 08:00。</p>
+        </section>
+
+        <!-- 3. 立绘 -->
+        <section class="step">
+          <h1 data-i18n="onboard.step3Title">先挑一个样子</h1>
+          <p class="lead" data-i18n="onboard.step3Lead">
+            第一眼看到的就是她。可以先留着随包的立绘，也可以现在把自己准备好的模型导进来，之后在设置里随时能换。
+          </p>
+
+          <div class="row stand-actions">
+            <button type="button" class="link" id="stand-import" data-i18n="onboard.standImport">
+              导入一个模型
+            </button>
+            <button type="button" class="link" id="stand-folder" data-i18n="onboard.standFolder">
+              打开模型文件夹
+            </button>
+          </div>
+
+          <div class="stand-list" id="stand-list"></div>
+
+          <p class="note" id="stand-status" data-i18n="onboard.standNote">
+            模型只留在本机。卸载重装、换版本都不会丢。
+          </p>
+        </section>
+
+        <!-- 4. 密钥 -->
+        <section class="step">
+          <h1 data-i18n="onboard.step4Title">用自己的钥匙</h1>
+          <p class="lead" data-i18n="onboard.step4Lead">
+            余额查询这类联网功能，需要你自己的 DeepSeek API Key。没有也能正常用，只是这些功能会保持关闭。
+          </p>
+          <div class="secret">
+            <input
+              id="api-key"
+              class="text"
+              type="password"
+              placeholder="sk-..."
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button type="button" id="save-key" data-i18n="onboard.save">保存</button>
+          </div>
+          <p class="note" id="key-status" data-i18n="onboard.keyNote">
+            只存进本机加密仓库，界面上永远只显示掩码，也不会写进日志。
+          </p>
+
+          <!-- 换机用户：备份入口默认收起，不打扰新用户 -->
+          <div class="restore">
+            <button type="button" class="link" id="restore-toggle" data-i18n="onboard.restoreToggle">有旧备份？从这里恢复</button>
+            <div class="restore-box" id="restore-box" hidden>
+              <input
+                id="restore-password"
+                class="text"
+                type="password"
+                data-i18n-placeholder="onboard.restorePlaceholder"
+                placeholder="备份口令"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button type="button" class="restore-btn" id="restore-confirm" data-i18n="onboard.restoreConfirm">恢复并重启</button>
+            </div>
+            <p class="note" id="restore-latest" hidden></p>
+            <p class="note" id="restore-latest-none" data-i18n="onboard.restoreLatestNone">还没找到备份文件：把 .petbackup 放进文档目录，或点「恢复并重启」后选择文件</p>
+            <p class="note" id="restore-status" data-i18n="onboard.restoreNote">口令丢了，备份也就打不开了。</p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="foot">
+        <button type="button" class="link" id="skip" data-i18n="onboard.skip">跳过这一步</button>
+        <button type="button" class="primary" id="next" data-i18n="onboard.next">下一步</button>
+      </footer>
+    </div>
+
+    <script src="backup-policy.js"></script>
+    <script src="onboarding.js"></script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "@pet/ui",
+  "version": "2.0.0-dev.0",
+  "type": "module",
+  "description": "设置界面骨架：分组结构、字段注册、只读展示态。纯数据，不依赖 DOM / Electron / 宿主 API",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@pet/shared": "workspace:*",
+    "@pet/core": "workspace:*"
+  }
+}

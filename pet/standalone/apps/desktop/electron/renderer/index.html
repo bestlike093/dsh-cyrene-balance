@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; img-src 'self' file: data: blob: pet-media:; media-src 'self' file: blob:; font-src 'self' data: pet-media:; script-src 'self' 'unsafe-inline' file:; style-src 'self' 'unsafe-inline'; connect-src 'self' pet-media:"
+    />
+    <title data-i18n="pet.title">桌宠</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "@pet/shared": "../../../../packages/shared/dist/index.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="banner" hidden></div>
+
+      <!-- 立绘区：纵向排布的最后一段。气泡与状态条排在它上方，
+           空间不够时只压缩这一块，所以气泡不会盖到立绘。 -->
+      <div id="stage-area">
+        <canvas id="stage"></canvas>
+
+      <!-- B2-4 接线：状态为 failed 时必须在这里给出可见提示，不能留空白画面。 -->
+      <div id="render-notice" hidden></div>
+
+      <!-- 空态引导卡：没有素材时显示，加载成功后整体淡出。 -->
+      <section id="empty-state">
+        <div class="empty-card">
+          <!-- 没有立绘时也要能先进设置：配 Key、调窗口、改气泡都在这里。
+               模型载入后整张卡淡出，入口交回右键菜单。 -->
+          <button
+            type="button"
+            class="empty-settings"
+            id="empty-settings"
+            data-i18n-aria-label="pet.settings"
+            aria-label="设置"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.8" />
+              <path
+                d="M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.7-1.2-1.6-2.8-2 .7a7.7 7.7 0 0 0-2.7-1.6L14.3 3h-3.2l-.5 2.5a7.7 7.7 0 0 0-2.7 1.6l-2-.7L4.3 9.2l1.7 1.2a7.6 7.6 0 0 0 0 3.2l-1.7 1.2 1.6 2.8 2-.7a7.7 7.7 0 0 0 2.7 1.6l.5 2.5h3.2l.5-2.5a7.7 7.7 0 0 0 2.7-1.6l2 .7 1.6-2.8-1.7-1.2Z"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+
+          <div class="empty-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48" width="44" height="44" fill="none">
+              <path
+                d="M24 38c0-6 3.2-10.4 8.4-12.6C36.6 23.5 40 20 40 15.6c0-4.4-3.4-7.6-8-7.6-4 0-6.8 2-8 4.8-1.2-2.8-4-4.8-8-4.8-4.6 0-8 3.2-8 7.6 0 4.4 3.4 7.9 7.6 9.8C20.8 27.6 24 32 24 38Z"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linejoin="round"
+              />
+              <circle cx="24" cy="41.5" r="1.6" fill="currentColor" />
+            </svg>
+          </div>
+
+          <h1 class="empty-title" data-i18n="pet.emptyTitle">还没有立绘</h1>
+          <p class="empty-desc">
+            <span data-i18n="pet.emptyDesc1">Live2D 模型不随应用分发</span><br />
+            <span data-i18n="pet.emptyDesc2">请先去作者那里下载，再从这里导入</span>
+          </p>
+
+          <div class="empty-actions">
+            <button type="button" class="empty-btn primary" id="import-zip" data-i18n="pet.importZip">
+              导入模型压缩包
+            </button>
+            <button type="button" class="empty-btn" id="import-folder" data-i18n="pet.importFolder">
+              导入已解压的文件夹
+            </button>
+          </div>
+
+          <!-- 静态图 / 视频的临时预览保留，只是不再当主入口。 -->
+          <div class="empty-actions secondary">
+            <label class="empty-btn" data-i18n="pet.previewImage">
+              临时预览图片
+              <input
+                id="file"
+                type="file"
+                multiple
+                accept=".png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.json"
+              />
+            </label>
+          </div>
+
+          <p class="empty-formats" data-i18n="pet.formats">支持 .zip，或含 model3.json 的文件夹</p>
+        </div>
+      </section>
+      </div>
+
+      <!-- HUD（状态条）：文档流里的中间一段，始终在立绘上方。设置里 showHud 打开才显示。 -->
+      <div id="hud" hidden></div>
+
+      <!-- 模块挂载点（shadow）：气泡由 builtin.bubble 在这里挂出。 -->
+      <div id="modules"></div>
+    </div>
+    <script>
+      // 运行期防线：模块图加载失败时，顶层代码一行都不会执行，
+      // window.onerror 也来不及注册。这里用超时兜底把失败显示到界面上，
+      // 避免出现「页面看着正常但什么都不工作」的静默状态。
+      window.__dshRenderBooted = false
+      window.addEventListener(
+        'error',
+        function (event) {
+          if (event.target && event.target.tagName === 'SCRIPT') {
+            var banner = document.getElementById('banner')
+            if (banner) {
+              banner.hidden = false
+              banner.textContent = '渲染脚本加载失败：' + (event.target.src || '模块图未建立')
+            }
+          }
+        },
+        true
+      )
+      setTimeout(function () {
+        if (window.__dshRenderBooted) return
+        var banner = document.getElementById('banner')
+        if (banner) {
+          banner.hidden = false
+          banner.textContent = '渲染脚本未启动：模块加载失败，请查看 DevTools 控制台'
+        }
+      }, 3000)
+    </script>
+    <!-- Live2D 运行时：pixi.js / pixi-live2d-display 为 MIT；Cubism Core 是 Live2D 官方专有软件，
+         本地放置、不进仓库。缺文件时上面那个 boot 防线会直接把提示打到 banner 上。 -->
+    <script src="./vendor/pixi.min.js"></script>
+    <!-- 页面 CSP 没有 'unsafe-eval'，pixi 6 的 shader 编译默认走 new Function，会直接抛错。
+         这个官方补丁用查表代替 eval，必须紧跟在 pixi 之后加载。 -->
+    <script src="./vendor/pixi-unsafe-eval.min.js"></script>
+    <script src="./vendor/live2dcubismcore.min.js"></script>
+    <script src="./vendor/live2d-cubism4.min.js"></script>
+    <script type="module" src="./renderer.mjs"></script>
+  </body>
+</html>

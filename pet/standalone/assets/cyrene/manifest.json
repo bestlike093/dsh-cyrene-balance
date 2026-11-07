@@ -1,0 +1,61 @@
+﻿{
+    "id":  "cyrene",
+    "version":  1,
+    "source":  "bestlike093/cyrene-balance",
+    "sourceCommit":  "c54d9f67b1f41f6f2a383db86d0c4f2ae10d487e",
+    "license":  "self-authored; see ../ATTRIBUTION.md",
+    "poses":  {
+                  "default":  "stand/default.png",
+                  "neutral":  "stand/calm.png",
+                  "calm":  "stand/calm.png",
+                  "confident":  "stand/confident.png",
+                  "happy":  "stand/love-happy.png",
+                  "playful":  "stand/playful.png",
+                  "serious":  "stand/serious.png"
+              },
+    "frames":  [
+                   "frames/frame-01.png",
+                   "frames/frame-02.png",
+                   "frames/frame-03.png",
+                   "frames/frame-04.png",
+                   "frames/frame-05.png",
+                   "frames/frame-06.png",
+                   "frames/frame-07.png",
+                   "frames/frame-08.png"
+               ],
+    "emotions":  {
+                     "neutral":  "emoji/midmeh.png",
+                     "happy":  "emoji/awesome.png",
+                     "excited":  "emoji/hellyeah.png",
+                     "sad":  "emoji/Hurtcry.png",
+                     "crying":  "emoji/Sobbinghard.png",
+                     "angry":  "emoji/Madnow.png",
+                     "shy":  "emoji/blushhard.png",
+                     "thinking":  "emoji/thinking.png",
+                     "sleepy":  "emoji/sleepynow.png",
+                     "tired":  "emoji/deadtired.png",
+                     "surprised":  "emoji/Whatswrong.png",
+                     "confused":  "emoji/awkward.png",
+                     "love":  "emoji/Airkiss.png",
+                     "thanks":  "emoji/Thanks.png",
+                     "ok":  "emoji/OK.png",
+                     "greeting":  "emoji/hello.png",
+                     "goodnight":  "emoji/goodnight.png",
+                     "cheer":  "emoji/fighting.png",
+                     "hug":  "emoji/hugtight.png",
+                     "hungry":  "emoji/eating.png"
+                 },
+    "avatar":  "avatar.png",
+    "sounds":  {
+                   "greeting":  "audio/greeting.wav",
+                   "taskEnd":  "audio/task-end.wav",
+                   "cost":  "audio/cost-default.wav",
+                   "expOrb":  "audio/exp-orb.wav",
+                   "ya1":  "audio/ya-1.mp3",
+                   "ya2":  "audio/ya-2.mp3"
+               },
+    "stickers":  {
+                     "money":  "sticker/bubble-money.gif",
+                     "petpet":  "sticker/bubble-petpet.gif"
+                 }
+}

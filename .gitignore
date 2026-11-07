@@ -1,4 +1,7 @@
 node_modules/
+# 内置独立版的 @pet/* 是随包产物，不是可重装的依赖，必须入库
+!pet/standalone/node_modules/
+!pet/standalone/node_modules/**
 *.log
 .DS_Store
 Thumbs.db

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' file: data: pet-media:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
+    <title data-i18n="stickers.windowTitle">桌宠 · 表情包</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./stickers.css" />
+    <script src="./i18n.js"></script>
+  </head>
+  <body>
+    <header class="s-head">
+      <div class="s-head-text">
+        <h1 data-i18n="stickers.heading">表情包</h1>
+        <p id="s-summary" data-i18n="stickers.loading">正在读取…</p>
+      </div>
+      <button
+        type="button"
+        id="s-close"
+        class="s-close"
+        data-i18n-aria-label="stickers.close"
+        aria-label="关闭"
+      >
+        ×
+      </button>
+    </header>
+
+    <nav class="s-tabs" data-i18n-aria-label="stickers.sections" aria-label="表情包分区">
+      <button type="button" class="s-tab is-active" data-tab="inbox">
+        <span data-i18n="stickers.inbox">待审核</span>
+        <span id="s-inbox-count" class="s-count">0</span>
+      </button>
+      <button type="button" class="s-tab" data-tab="library">
+        <span data-i18n="stickers.library">已入库</span>
+        <span id="s-library-count" class="s-count">0</span>
+      </button>
+      <button type="button" class="s-tab" data-tab="packs">
+        <span data-i18n="stickers.packs">素材包</span>
+        <span id="s-packs-count" class="s-count">0</span>
+      </button>
+    </nav>
+
+    <main class="s-body">
+      <section id="s-panel-inbox" class="s-panel">
+        <label class="s-switch s-auto-approve">
+          <input type="checkbox" id="s-auto-approve" />
+          <span data-i18n="stickers.autoApprove">新图直接入库，不用逐张审核</span>
+        </label>
+        <p class="s-note" data-i18n="stickers.inboxNote">
+          QQ 发来的图只会先落到这里，不会自动进库。点「入库」才收下，点「丢弃」会删掉源文件。
+        </p>
+        <div id="s-inbox-grid" class="s-grid"></div>
+      </section>
+
+      <section id="s-panel-library" class="s-panel" hidden>
+        <div class="s-toolbar">
+          <label class="s-field">
+            <span data-i18n="stickers.pack">素材包</span>
+            <select id="s-pack-filter">
+              <option value="" data-i18n="stickers.all">全部</option>
+            </select>
+          </label>
+          <button type="button" id="s-refresh" class="s-ghost" data-i18n="stickers.refresh">
+            刷新
+          </button>
+        </div>
+        <div id="s-library-grid" class="s-grid"></div>
+      </section>
+
+      <section id="s-panel-packs" class="s-panel" hidden>
+        <p class="s-note" data-i18n="stickers.packsNote">
+          导入的 zip 会按 package.json 认图标、字体、气泡和表情；停用只是收起来，文件还在。内置包跟着程序走，不能删。
+        </p>
+        <div class="s-toolbar">
+          <button type="button" id="s-import-pack" class="is-primary" data-i18n="stickers.import">
+            导入 zip
+          </button>
+          <button type="button" id="s-refresh-packs" class="s-ghost" data-i18n="stickers.refreshPacks">
+            刷新
+          </button>
+          <p id="s-packs-status" class="s-meta" role="status"></p>
+        </div>
+        <div id="s-pack-list" class="s-pack-list"></div>
+      </section>
+    </main>
+
+    <div id="s-lightbox" class="s-lightbox" hidden>
+      <button
+        type="button"
+        id="s-lightbox-close"
+        class="s-lightbox-close"
+        data-i18n-aria-label="stickers.closePreview"
+        aria-label="关闭大图"
+      >
+        ×
+      </button>
+      <img id="s-lightbox-img" alt="" />
+      <p id="s-lightbox-caption"></p>
+    </div>
+
+    <script src="./stickers.js"></script>
+  </body>
+</html>

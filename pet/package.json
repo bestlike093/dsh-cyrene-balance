@@ -3,5 +3,5 @@
   "version": "2.0.0",
   "private": true,
   "author": "旅人 (bestlike093)",
-  "main": "main.js"
+  "main": "standalone/apps/desktop/electron/main.mjs"
 }

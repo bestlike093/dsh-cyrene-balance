@@ -1,0 +1,87 @@
+<!doctype html>
+<!-- 兜底页必须在 renderer / i18n 都不可用时仍可读，文案刻意内联，不接 data-i18n。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>桌宠 · 画面没能加载</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --fallback-bg-top: #2b2230;
+        --fallback-bg-bottom: #171319;
+        --fallback-fg: #f3e9f2;
+        --fallback-heading: #ffc7e4;
+        --fallback-text: #d9cbd8;
+        --fallback-code-fg: #ffe1f0;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: radial-gradient(
+          circle at 50% 0%,
+          var(--fallback-bg-top) 0%,
+          var(--fallback-bg-bottom) 70%
+        );
+        color: var(--fallback-fg);
+        font: 13px/1.7 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+        user-select: none;
+      }
+      .card {
+        max-width: 420px;
+        padding: 20px 22px;
+        border: 1px solid rgba(255, 182, 222, 0.28);
+        border-radius: 14px;
+        background: rgba(28, 22, 32, 0.86);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--fallback-heading);
+      }
+      p {
+        margin: 8px 0 0;
+        color: var(--fallback-text);
+      }
+      ol {
+        margin: 10px 0 0;
+        padding-left: 20px;
+        color: var(--fallback-text);
+      }
+      code {
+        padding: 1px 5px;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.09);
+        font-family: Consolas, "Cascadia Mono", monospace;
+        font-size: 12px;
+        color: var(--fallback-code-fg);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>画面没能加载出来</h1>
+      <p>桌宠的主界面这次没有启动成功。它不会自己消失，按下面做就行。</p>
+      <ol>
+        <li>到右下角托盘图标上右键，选「退出」，再重新打开桌宠。</li>
+        <li>还是这样的话，把日志发给开发者：<code>%APPDATA%\DSH Pet\logs</code></li>
+      </ol>
+      <p>你的设置、记忆和素材都在数据目录里，这一步不会动它们。</p>
+    </main>
+  </body>
+</html>

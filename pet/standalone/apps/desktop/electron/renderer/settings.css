@@ -1,0 +1,1829 @@
+/* 设置窗样式：配色 token 来自 theme.css，本文件只写布局与圆角。 */
+
+:root {
+  --cy-radius: 14px;
+  --cy-radius-lg: 18px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: linear-gradient(170deg, var(--settings-nav-from), var(--settings-nav-to));
+  color: var(--cy-ink);
+  font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+  font-size: 13px;
+  user-select: none;
+}
+
+/* 左导航 + 右内容 + 底部状态行。
+ * 导航区可拖动窗口，内容区不可拖，否则滑杆拖不动。 */
+body {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    "nav body"
+    "nav foot";
+}
+
+.s-nav {
+  grid-area: nav;
+  -webkit-app-region: drag;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  padding: 16px 10px 14px;
+  overflow-y: auto;
+  background: linear-gradient(150deg, var(--settings-nav-from), var(--settings-nav-to));
+  border-right: 1px solid var(--cy-border);
+}
+
+.s-brand {
+  padding: 0 6px;
+}
+
+.s-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.s-sub {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--cy-muted);
+}
+
+.s-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.s-nav-list button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--cy-ink);
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  font-size: 12.5px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.s-nav-list button:hover {
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.s-nav-list button.active {
+  background: linear-gradient(140deg, var(--cy-pink), var(--settings-nav-active));
+  color: var(--white);
+  font-weight: 600;
+}
+
+.nav-ico {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  opacity: 0.82;
+}
+
+.s-nav-list button.active .nav-ico {
+  opacity: 1;
+}
+
+/* 一级导航有搜索命中时点一个小圆点，不改变按钮本身的可读性。 */
+.s-nav-list button {
+  position: relative;
+}
+
+.s-nav-list button.has-search-hit::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--cy-pink);
+  box-shadow: 0 0 0 2px var(--cy-pink-soft);
+}
+
+.s-nav-list button.has-search-hit.active::after {
+  background: var(--white);
+  box-shadow: none;
+}
+
+/* 页头：sticky 在内容顶部，滚动时仍能看见当前分组与保存状态。 */
+.s-pagehead {
+  position: sticky;
+  top: -14px;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -14px -16px 10px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--cy-border);
+  background: color-mix(in srgb, var(--settings-nav-from) 84%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.s-pagehead-text {
+  min-width: 0;
+}
+
+.s-pagehead-kicker {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--cy-muted);
+}
+
+.s-pagehead-title {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+/* 右上角窗口控制：设置窗是 frame:false，系统按钮不会自己出现。 */
+.s-windowbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.s-win-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.s-win-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+
+.s-win-btn:hover {
+  background: rgba(0, 0, 0, .06);
+  color: var(--ink);
+}
+
+.s-win-btn.s-win-close:hover {
+  background: var(--danger);
+  color: var(--white);
+}
+
+.s-win-btn svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.s-pagehead-desc {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--cy-muted);
+}
+
+.s-save-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  padding: 4px 9px;
+  border: 1px solid var(--cy-border);
+  border-radius: 999px;
+  background: var(--cy-surface);
+  color: var(--cy-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.s-save-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cy-muted);
+}
+
+#save-state[data-state="saving"] .s-save-dot {
+  background: var(--cy-pink);
+  animation: savePulse 1s ease-in-out infinite;
+}
+
+#save-state[data-state="saved"] .s-save-dot {
+  background: var(--cy-pink);
+}
+
+#save-state[data-state="error"] {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+#save-state[data-state="error"] .s-save-dot {
+  background: var(--danger);
+}
+
+@keyframes savePulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 组内子标签：只在一级分组有多个面板时出现。 */
+.s-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.s-subnav[hidden],
+.s-search-empty[hidden] {
+  display: none;
+}
+
+.s-subnav button {
+  appearance: none;
+  border: 1px solid var(--cy-border);
+  border-radius: 999px;
+  background: var(--cy-surface);
+  color: var(--cy-ink);
+  padding: 4px 11px;
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.s-subnav button:hover {
+  border-color: var(--cy-border-strong);
+}
+
+.s-subnav button.active {
+  border-color: transparent;
+  background: linear-gradient(140deg, var(--cy-pink), var(--settings-nav-active));
+  color: var(--white);
+  font-weight: 600;
+}
+
+.s-search-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 18px 16px;
+  border: 1px dashed var(--cy-border);
+  border-radius: var(--cy-radius);
+  background: var(--cy-surface);
+  color: var(--cy-muted);
+  font-size: 12px;
+}
+
+.s-search-empty strong {
+  color: var(--cy-ink);
+  font-size: 13px;
+}
+
+/* 搜索过滤：类名已经加到条目上，之前缺这条规则，输入后界面看起来毫无反应。 */
+.is-search-hidden {
+  display: none !important;
+}
+
+.item.is-search-hit {
+  border-radius: 8px;
+  background: var(--cy-pink-soft);
+  box-shadow: inset 0 0 0 1px var(--cy-border-strong);
+  scroll-margin-top: 96px;
+}
+
+.section.is-locked,
+.item.is-locked {
+  cursor: default;
+}
+
+.locked-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px dashed var(--cy-border-strong);
+  border-radius: 999px;
+  color: var(--cy-muted);
+  font-size: 10px;
+  font-weight: 500;
+  vertical-align: 1px;
+}
+
+/* 导航分组：标题只做定位，不抢按钮的注意力。 */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group + .nav-group {
+  margin-top: 10px;
+}
+
+.nav-group-title {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  color: var(--cy-ink);
+  opacity: 0.62;
+  letter-spacing: 0.06em;
+}
+
+/* 通用面板两级结构：组标题可点击折叠，默认展开。 */
+.section-group {
+  display: block;
+  border: 0;
+  margin: 0;
+}
+
+.section-group > summary {
+  cursor: pointer;
+  padding: 6px 2px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cy-ink);
+  opacity: 0.7;
+  list-style: none;
+}
+
+.section-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.section-group > summary::after {
+  content: '▾';
+  float: right;
+  opacity: 0.55;
+}
+
+.section-group:not([open]) > summary::after {
+  content: '▸';
+}
+
+/* 素材包行尾的启用开关：说明文字小一号，不跟删除按钮抢位置。 */
+.pack-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--cy-ink);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* 来源分组标题：随包 / 导入，给列表一个轻量的分栏。 */
+.pack-group {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--cy-ink);
+  opacity: 0.55;
+}
+
+.pack-group:first-child {
+  margin-top: 0;
+}
+
+.s-body {
+  grid-area: body;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 16px 12px;
+  -webkit-app-region: no-drag;
+}
+
+/* 一次只显示一组；不用 display:none 之外的技巧，避免高度计算跳来跳去。 */
+.panel {
+  display: none;
+}
+
+.panel.active {
+  display: block;
+}
+
+/* 滚动条压细，避免在粉色底上太扎眼 */
+.s-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.s-body::-webkit-scrollbar-thumb {
+  background: rgba(239, 107, 168, 0.28);
+  border-radius: 999px;
+}
+
+.s-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.section {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: var(--cy-radius);
+  background: linear-gradient(160deg, var(--cy-surface), var(--cy-pink-soft));
+  border: 1px solid var(--cy-border);
+  box-shadow: var(--cy-shadow);
+}
+
+.section-title {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cy-pink-deep);
+  letter-spacing: 0.04em;
+}
+
+/* 一行设置：左标签右控件 */
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+}
+
+.item + .item {
+  border-top: 1px dashed rgba(239, 107, 168, 0.18);
+}
+
+.item-text {
+  min-width: 0;
+}
+
+.item-label {
+  font-size: 13px;
+  color: var(--cy-ink);
+}
+
+.item-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--cy-muted);
+  line-height: 1.45;
+}
+
+/* ---------- 开关 ---------- */
+
+.switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.switch .knob {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--switch-track);
+  border: 1px solid var(--cy-border);
+  transition: background 0.22s ease;
+  pointer-events: none;
+}
+
+.switch .knob::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 1px 3px rgba(190, 80, 130, 0.35);
+  transition: transform 0.22s ease;
+}
+
+.switch input:checked + .knob {
+  background: linear-gradient(140deg, var(--cy-pink), var(--settings-nav-active));
+}
+
+.switch input:checked + .knob::after {
+  transform: translateX(18px);
+}
+
+.switch input:focus-visible + .knob {
+  outline: 2px solid var(--cy-border-strong);
+  outline-offset: 2px;
+}
+
+/* ---------- 滑杆 ---------- */
+
+.range-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 132px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--cy-pink), var(--accent-soft));
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--white);
+  border: 2px solid var(--cy-pink);
+  box-shadow: 0 1px 4px rgba(190, 80, 130, 0.35);
+}
+
+.range-value {
+  min-width: 38px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--cy-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 输入与下拉 ---------- */
+
+input[type="text"],
+select {
+  flex: 0 0 auto;
+  width: 150px;
+  padding: 6px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--cy-border);
+  background: var(--white);
+  color: var(--cy-ink);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+input[type="text"]:focus,
+select:focus {
+  border-color: var(--cy-pink);
+  box-shadow: 0 0 0 3px rgba(239, 107, 168, 0.14);
+}
+
+/* ---------- 分段按钮 ---------- */
+
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--cy-border);
+}
+
+.seg button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--cy-muted);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+
+.seg button.active {
+  background: linear-gradient(140deg, var(--cy-pink), var(--settings-nav-active));
+  color: var(--white);
+  font-weight: 600;
+}
+
+/* 配色按钮的色点：用 ::before 画，避免动按钮里的文字（data-i18n 会重写 textContent） */
+#theme-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#theme-seg button::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--theme-preview-blue);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  flex: 0 0 auto;
+}
+
+#theme-seg button[data-theme='OceanBlue']::before {
+  background: var(--theme-preview-blue);
+}
+
+#theme-seg button[data-theme='SakuraPink']::before {
+  background: var(--theme-preview-pink);
+}
+
+#theme-seg button[data-theme='Paper']::before {
+  background: var(--theme-preview-ink);
+}
+
+/* 选中态：色点外再套一圈，深色浅色都分得清 */
+#theme-seg button.active::before {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--cy-pink);
+}
+
+/* ---------- 设置项搜索 ---------- */
+
+.s-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  /* 搜索框在 .s-nav 的拖动区里，必须显式退出拖动，否则点不进输入框。 */
+  -webkit-app-region: no-drag;
+}
+
+.s-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--cy-border);
+  background: var(--surface);
+  color: var(--cy-ink);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.s-search input:focus {
+  outline: 2px solid var(--cy-border-strong);
+  outline-offset: 1px;
+}
+
+.s-search-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--cy-muted);
+  white-space: nowrap;
+}
+
+.s-search-count[hidden] {
+  display: none;
+}
+
+/* .item 自身是 flex，UA 的 [hidden] 会被盖掉，这里显式让出位置。 */
+.qq-webhook-only[hidden] {
+  display: none;
+}
+
+/* ---------- 分组恢复默认 ---------- */
+
+.section-reset {
+  margin-top: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px dashed var(--cy-border);
+  background: transparent;
+  color: var(--cy-muted);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.section-reset:hover {
+  border-color: var(--cy-border-strong);
+  color: var(--cy-ink);
+}
+
+/* 搜索时被过滤掉的条目与分组 */
+.is-search-hidden {
+  display: none;
+}
+
+/* ---------- 气泡预览 ---------- */
+
+.bubble-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 2px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--cy-border);
+  background: var(--page-from);
+}
+
+.bubble-preview-label {
+  font-size: 11px;
+  color: var(--cy-muted);
+}
+
+.bubble-preview-balloon {
+  position: relative;
+  align-self: flex-start;
+  max-width: 260px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--bubble-border);
+  background: var(--bubble-bg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  color: var(--cy-ink);
+  font-size: 14.5px;
+  line-height: 1.5;
+  box-shadow: 0 6px 18px var(--bubble-shadow-color);
+  transition: font-size 0.12s ease, border-radius 0.12s ease, opacity 0.12s ease;
+}
+
+.bubble-preview-balloon.has-background {
+  /* 底图按切片做九宫格拉伸，四角不跟着放大 */
+  background-color: transparent;
+  background-image: none;
+  border-width: var(--preview-slice, 12px);
+  border-image-source: var(--preview-image);
+  border-image-slice: var(--preview-slice, 12);
+  border-image-repeat: stretch;
+}
+
+.bubble-preview-sticker {
+  position: absolute;
+  right: -10px;
+  bottom: -10px;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* ---------- 行内小按钮 ---------- */
+
+.inline-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.inline-group > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.inline-btn {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--cy-border-strong);
+  background: var(--cy-surface);
+  color: var(--cy-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, color 0.16s ease;
+}
+
+.inline-btn:hover:not(:disabled) {
+  border-color: var(--cy-pink);
+  color: var(--cy-pink-deep);
+}
+
+.inline-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+/* 忙碌态不用 disabled：保留焦点与可读性，只拦截指针和点击。 */
+.inline-btn[aria-disabled='true'],
+.secret-row button[aria-disabled='true'] {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 危险操作区：靠留白与描边和常规设置隔开，不引入新的刺眼配色。 */
+.danger-zone {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--danger-line);
+}
+
+.danger-title {
+  font-size: 12px;
+  color: var(--danger);
+  letter-spacing: 0.04em;
+}
+
+.danger-btn {
+  border-color: var(--danger-line-strong);
+  color: var(--danger);
+}
+
+.danger-btn:hover {
+  background: var(--danger-soft);
+}
+
+/* ---------- 待实现 ---------- */
+
+.section.pending {
+  background: rgba(250, 246, 248, 0.72);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.section.pending .section-title,
+.section.pending .item-label {
+  color: var(--muted);
+}
+
+.section.pending .item-hint {
+  color: var(--muted);
+}
+
+.badge-pending {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  background: rgba(168, 146, 156, 0.14);
+  vertical-align: middle;
+}
+
+/* 内测未开放：控件留在原位，但不接受操作。不用 disabled，避免原生禁用样式与语义分叉。 */
+.beta-locked,
+.beta-locked .item-label,
+.beta-locked .item-hint {
+  color: var(--muted);
+}
+
+.beta-locked .switch {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.badge-locked {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  background: rgba(168, 146, 156, 0.14);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.badge-locked:hover {
+  color: var(--text);
+  background: rgba(168, 146, 156, 0.24);
+}
+
+/* 不可交互的状态值：控件位不放假下拉，直接写清楚现在是什么状态 */
+.value-static {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  white-space: nowrap;
+}
+
+/* 段尾说明：解释「这个开关什么时候生效」，避免用户以为没反应 */
+.section-note {
+  margin: 2px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--cy-border);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--cy-muted);
+}
+
+/* 三段式折叠说明：默认收起，展开才解释这一段管什么，避免首屏被长文案淹没。 */
+.hint-more {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--cy-border);
+  border-radius: 8px;
+  background: rgba(250, 246, 248, 0.6);
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--cy-muted);
+}
+
+.hint-more > summary {
+  cursor: pointer;
+  color: var(--cy-pink-deep);
+  font-weight: 600;
+  list-style: none;
+}
+
+.hint-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.hint-more > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.16s ease;
+}
+
+.hint-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.hint-more-body {
+  margin-top: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.hint-more-body p {
+  margin: 0;
+}
+
+.hint-more-body strong {
+  color: var(--cy-ink-soft, var(--cy-ink));
+  margin-right: 6px;
+}
+
+/* 游戏日常：演练结果按行显示，路径与依赖各占一行 */
+.game-preview {
+  white-space: pre-line;
+}
+
+/* 运行记录：一条一行，状态和时间靠左，模式和 id 靠右淡一点。 */
+.game-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.game-run {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--cy-line);
+  font-size: 12px;
+}
+
+.game-days {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+/* 字数计数：贴着输入框右下，等宽数字避免输入时抖动 */
+.char-count {
+  margin-top: 6px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cy-muted);
+}
+
+/* 接近上限先提醒，写满后换成错误色；只是视觉提示，不拦输入 */
+.char-count.is-near {
+  color: var(--accent-deep);
+}
+
+.char-count.is-full {
+  color: var(--danger);
+}
+
+/* 人格分段：字数在左、恢复默认在右，别把按钮挤到下一行 */
+.persona-section-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.persona-section-foot .char-count {
+  margin-top: 0;
+  text-align: left;
+}
+
+/* 缩略图选择器：只看图就能选，选中项用主题色描边 */
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  width: 100%;
+}
+
+.asset-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--cy-border);
+  border-radius: 10px;
+  background: var(--cy-surface);
+  cursor: pointer;
+}
+
+.asset-tile img {
+  width: 100%;
+  height: 56px;
+  object-fit: contain;
+}
+
+.asset-tile span {
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--cy-muted);
+}
+
+.asset-tile.is-active {
+  border-color: var(--cy-pink);
+  box-shadow: 0 0 0 2px var(--cy-pink-soft);
+}
+
+.asset-tile-none {
+  justify-content: center;
+  min-height: 76px;
+  font-size: 11px;
+  color: var(--cy-muted);
+}
+
+/* 待实现区里的控件保持可见但不可交互，避免看起来能用 */
+.section.pending input,
+.section.pending select,
+.section.pending button {
+  pointer-events: none;
+  opacity: var(--disabled-opacity);
+}
+
+/* ---------- 诊断 ---------- */
+
+/* 运行状态四卡片：QQ / 记忆 / 今天主动 / 上次反思，一眼能扫完。 */
+.status-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 14px;
+}
+
+.status-card {
+  min-width: 0;
+  padding: 10px 12px 9px;
+  border: 1px solid var(--cy-border);
+  border-radius: var(--cy-radius);
+  background: var(--cy-surface);
+}
+
+.status-card-label {
+  font-size: 11px;
+  color: var(--cy-muted);
+}
+
+.status-card-value {
+  margin-top: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--cy-ink);
+  word-break: break-word;
+}
+
+.status-card-value[data-tone='ok'] {
+  color: var(--cy-pink-deep);
+}
+
+.status-card-value[data-tone='off'] {
+  color: var(--cy-muted);
+}
+
+.status-card-value[data-tone='warn'] {
+  color: var(--cy-warn);
+}
+
+.status-card-note {
+  min-height: 14px;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--cy-muted);
+  word-break: break-word;
+}
+
+@media (max-width: 760px) {
+  .status-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.diag-grid {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 5px 10px;
+  font-size: 12px;
+}
+
+.diag-key {
+  color: var(--cy-muted);
+}
+
+.diag-val {
+  color: var(--cy-ink);
+  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 底栏 ---------- */
+
+.s-foot {
+  grid-area: foot;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--cy-border);
+  background: rgba(255, 250, 252, 0.92);
+  font-size: 11px;
+  color: var(--cy-muted);
+}
+
+.s-foot button {
+  appearance: none;
+  border: 1px solid var(--cy-border);
+  background: var(--white);
+  color: var(--cy-ink);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.s-foot button:hover {
+  border-color: var(--cy-pink);
+}
+
+.saved-tip {
+  color: var(--cy-pink-deep);
+  opacity: 0;
+  transition: opacity 0.24s ease;
+}
+
+/* 保存反馈条：右上角浮出，不挤占布局；错误态改成红粉色。 */
+:root {
+  --s-toast-danger-border: #d9534f;
+  --s-toast-danger-ink: #a3312d;
+  --s-toast-danger-bg: #fff4f3;
+}
+
+.s-toast {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  z-index: 40;
+  max-width: min(340px, 70vw);
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--cy-pink) 55%, transparent);
+  background: color-mix(in srgb, var(--cy-surface) 92%, var(--cy-pink) 8%);
+  color: var(--cy-ink);
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 6px 18px rgba(90, 40, 60, 0.14);
+  animation: s-toast-in 0.18s ease-out;
+}
+
+.s-toast.is-error {
+  border-color: var(--s-toast-danger-border);
+  color: var(--s-toast-danger-ink);
+  background: var(--s-toast-danger-bg);
+}
+
+.s-toast[hidden] {
+  display: none;
+}
+
+@keyframes s-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.saved-tip.show {
+  opacity: 1;
+}
+
+/* 保存失败：常驻不淡出，用主题深色压重一点，不引入新的色值。 */
+.saved-tip.is-error {
+  opacity: 1;
+  font-weight: 600;
+  filter: saturate(1.8) brightness(0.82);
+}
+
+/* 计费动作提示 */
+.billing-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* 导入失败会逐条列出问题，保留换行 */
+#packs-status {
+  white-space: pre-line;
+}
+
+/* 立绘区：导入与切换模型 */
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.model-actions button {
+  flex: 1 1 0;
+  min-width: 96px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--cy-line);
+  background: transparent;
+  color: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.model-actions button:hover:not(:disabled) {
+  border-color: var(--cy-pink);
+  background: var(--cy-pink-soft);
+}
+
+.model-actions button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+/* 主动台词：右侧只放一个「试一句」，不抢输入控件的对齐位。 */
+.presence-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.presence-actions button {
+  padding: 7px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--cy-line);
+  background: transparent;
+  color: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.presence-actions button:hover:not(:disabled) {
+  border-color: var(--cy-pink);
+  background: var(--cy-pink-soft);
+}
+
+.presence-actions button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+/* 免打扰时间：两个原生 time 输入并排，窄屏也不会挤成一列。 */
+.time-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.time-range input {
+  width: 96px;
+}
+
+.time-sep {
+  opacity: 0.5;
+}
+
+/* DeepSeek 密钥行：输入框撑满，两个按钮固定在右侧。 */
+.secret-row {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.secret-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--cy-line);
+  background: var(--white);
+  color: inherit;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.secret-row input:focus {
+  outline: none;
+  border-color: var(--cy-pink);
+}
+
+.secret-row button {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--cy-line);
+  background: var(--white);
+  color: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.secret-row button:hover:not(:disabled) {
+  border-color: var(--cy-pink);
+  background: var(--cy-pink-soft);
+}
+
+.secret-row button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+/* ---------- 数字、时间与多行输入 ---------- */
+
+input[type="number"],
+input[type="time"] {
+  flex: 0 0 auto;
+  width: 118px;
+  padding: 6px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--cy-border);
+  background: var(--white);
+  color: var(--cy-ink);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="number"]:focus,
+input[type="time"]:focus {
+  border-color: var(--cy-pink);
+  box-shadow: 0 0 0 3px rgba(239, 107, 168, 0.14);
+}
+
+/* 多行输入占整行，标签在上、输入在下 */
+.item-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 84px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--cy-border);
+  background: var(--white);
+  color: var(--cy-ink);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  user-select: text;
+}
+
+textarea:focus {
+  border-color: var(--cy-pink);
+  box-shadow: 0 0 0 3px rgba(239, 107, 168, 0.14);
+}
+
+.sub-title {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cy-pink-deep);
+}
+
+/* 提示词预览：等宽、可选中、限高滚动，避免一条长提示词把面板撑开 */
+.preview-box {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--cy-border);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--cy-ink);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+/* 陪伴任务的状态读数与上方设置之间留一段距离 */
+.diag-grid.care-status {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--cy-border);
+}
+
+/* 记忆列表：每条一格，长文本换行；删除按钮固定在右侧 */
+.memory-list {
+  margin-top: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--cy-border);
+  border-radius: var(--cy-radius);
+  background: var(--cy-surface);
+}
+
+.memory-empty {
+  padding: 14px;
+  color: var(--cy-muted);
+  font-size: 12px;
+}
+
+/* 巡视与反思的结果只读展示：预格式保留换行，长文可滚动 */
+.daily-result {
+  margin-top: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--cy-border);
+  border-radius: var(--cy-radius);
+  background: var(--cy-surface);
+  color: var(--cy-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'meta action'
+    'text action'
+    'evidence action';
+  gap: 2px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--cy-line);
+}
+
+.memory-row:last-child {
+  border-bottom: 0;
+}
+
+.memory-meta {
+  grid-area: meta;
+  color: var(--cy-muted);
+  font-size: 11px;
+}
+
+.memory-text {
+  grid-area: text;
+  color: var(--cy-ink);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.memory-evidence {
+  grid-area: evidence;
+  color: var(--cy-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.memory-row button {
+  grid-area: action;
+  align-self: center;
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+
+/* 记忆筛选：来源与分类并排，窄屏自动换行 */
+.memory-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  color: var(--cy-muted);
+  font-size: 12px;
+}
+
+.memory-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-filter select {
+  padding: 3px 6px;
+  border: 1px solid var(--cy-border);
+  border-radius: 6px;
+  background: var(--cy-surface);
+  color: var(--cy-ink);
+  font-size: 12px;
+}
+
+/* 一行两个动作按钮：改、删 */
+.memory-actions {
+  grid-area: action;
+  align-self: center;
+  display: flex;
+  gap: 6px;
+}
+
+.memory-actions button {
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+
+.memory-text-editing {
+  outline: 1px dashed var(--cy-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+  cursor: text;
+}
+
+/* 素材包：列表只读展示，删除按钮单独一行右侧 */
+.pack-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+  font-size: 12px;
+  color: var(--cy-muted);
+}
+
+.pack-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--cy-line);
+  border-radius: 8px;
+  background: var(--cy-pink-soft);
+}
+
+/* 只有文字列吸收剩余宽度，缩略图与按钮保持原尺寸 */
+.pack-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pack-thumb {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: var(--cy-surface);
+}
+
+.pack-toggle,
+.pack-row > button {
+  flex: 0 0 auto;
+}
+
+.pack-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pack-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cy-ink);
+  font-weight: 600;
+}
+
+/* 状态徽标：可用不抢眼，损坏用危险色，停用用虚线弱化 */
+.pack-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--cy-line);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--cy-muted);
+  background: var(--cy-surface);
+}
+
+.pack-badge.is-broken {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+.pack-badge.is-disabled {
+  border-style: dashed;
+}
+
+.pack-summary {
+  padding-top: 2px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--cy-muted);
+}
+
+.pack-meta {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--cy-muted);
+  word-break: break-word;
+}
+
+/* 「气泡旁贴纸」：下拉旁边给一个去表情包页的入口，待审核数量也带过去 */
+.sticker-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.sticker-pending {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 窄窗口下把导航压窄，避免内容区只剩一点点宽度 */
+@media (max-width: 560px) {
+  body {
+    grid-template-columns: 112px 1fr;
+  }
+
+  .s-nav-list button {
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+
+  .s-pagehead {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .s-save-state {
+    margin-top: 0;
+  }
+
+  .range-wrap input[type="range"] {
+    width: 96px;
+  }
+}
+
+/* 「连接」页顶部的 QQ 机器人快捷入口：点一下直接滚到 AppID / AppSecret */
+.qq-jump {
+  display: block;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 143, 199, 0.4);
+  border-radius: 10px;
+  background: rgba(255, 143, 199, 0.12);
+  color: inherit;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.qq-jump::before {
+  content: "🤖 ";
+}
+
+.qq-jump:hover {
+  background: rgba(255, 143, 199, 0.22);
+}
+
+/* 游戏助手：风险门、周常账本、任务清单 */
+.game-assistant-panel {
+  margin: 8px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--cy-line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.game-assistant-risk-list {
+  margin: 8px 0 10px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.game-assistant-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.game-assistant-check input {
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.game-assistant-task {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px dashed var(--cy-line);
+}
+
+.game-assistant-task .item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}

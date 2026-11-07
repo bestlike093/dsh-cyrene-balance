@@ -1,0 +1,323 @@
+/* 首次引导窗。三张卡片同宽，用 is-active 切换，避免高度来回跳。 */
+/* 配色 token 来自 theme.css，本文件不再写具体颜色值。 */
+
+/* 备份恢复入口：默认收起，展开后与密钥输入同一视觉语言 */
+.restore {
+  margin-top: 18px;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.restore-box {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.restore-box[hidden] {
+  display: none;
+}
+
+.restore-box .text {
+  flex: 1;
+}
+
+.restore-btn {
+  padding: 0 14px;
+  border: 1px solid var(--pink);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--pink);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.restore-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 18px 26px 22px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  -webkit-app-region: drag;
+}
+
+.dots {
+  display: flex;
+  gap: 7px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line);
+  transition: background 0.18s ease;
+}
+
+.dot.is-active {
+  background: var(--pink);
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  margin-top: 20px;
+}
+
+/* 三张卡片叠在同一位置，只显示当前这张，切换时高度不会抖动。 */
+.step {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+}
+
+.step.is-active {
+  display: flex;
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.lead {
+  margin: 0 0 20px;
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.text {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--white);
+  color: var(--ink);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s ease;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.text:focus {
+  border-color: var(--pink);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.row-label {
+  color: var(--ink);
+}
+
+.time-row {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.time-row input {
+  width: 104px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.sep {
+  color: var(--muted);
+}
+
+.select {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--ink);
+  font-size: 13px;
+  outline: none;
+}
+
+/* 开关 */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  flex: none;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.knob {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--switch-track);
+  transition: background 0.18s ease;
+  pointer-events: none;
+}
+
+.knob::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 0.18s ease;
+}
+
+.switch input:checked + .knob {
+  background: var(--pink);
+}
+
+.switch input:checked + .knob::after {
+  transform: translateX(18px);
+}
+
+/* 密钥行 */
+.secret {
+  display: flex;
+  gap: 8px;
+}
+
+.secret .text {
+  flex: 1;
+}
+
+.secret button {
+  flex: none;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--pink-soft);
+  color: var(--pink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.secret button:hover:not(:disabled) {
+  border-color: var(--pink);
+}
+
+.secret button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+/* 底部 */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+}
+
+.link {
+  padding: 6px 2px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.link:hover {
+  color: var(--pink);
+}
+
+.primary {
+  padding: 9px 22px;
+  border: none;
+  border-radius: 10px;
+  background: var(--pink);
+  color: var(--white);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.primary:disabled {
+  opacity: var(--disabled-opacity-strong);
+  cursor: default;
+}
+
+/* 立绘这一步：已有的模型排成一列，点哪个换哪个。 */
+.stand-actions {
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.stand-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 10px 0 0;
+  min-height: 20px;
+}

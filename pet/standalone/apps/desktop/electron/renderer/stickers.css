@@ -1,0 +1,492 @@
+/*
+ * 表情包预览页：待审核区 + 已入库网格 + 大图。
+ * 颜色只取 theme.css 的语义变量，跟随主题切换，不在这里写死粉色。
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(165deg, var(--page-from) 0%, var(--page-to) 100%);
+  color: var(--ink);
+  font-family: var(--ui-font, 'Segoe UI', 'Microsoft YaHei UI', sans-serif);
+  font-size: 14px;
+  overflow: hidden;
+}
+
+/* 顶部 */
+.s-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 12px;
+  -webkit-app-region: drag;
+}
+
+.s-head-text h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+
+.s-head-text p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.s-close {
+  -webkit-app-region: no-drag;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.s-close:hover {
+  color: var(--accent-deep);
+  border-color: var(--accent-line-strong);
+}
+
+/* 分区切换 */
+.s-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 24px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.s-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.s-tab:hover {
+  background: var(--surface-soft);
+}
+
+.s-tab.is-active {
+  border-color: var(--accent-line-strong);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.s-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: inherit;
+  font-size: 11px;
+  text-align: center;
+}
+
+/* 内容区 */
+.s-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px 28px;
+}
+
+.s-panel[hidden] {
+  display: none;
+}
+
+.s-note {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.s-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.s-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.s-field select {
+  padding: 6px 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.s-ghost {
+  padding: 6px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.s-ghost:hover {
+  border-color: var(--accent-line-strong);
+  background: var(--accent-soft);
+}
+
+/* 网格 */
+.s-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 14px;
+}
+
+.s-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 4px 12px var(--accent-shadow);
+}
+
+.s-thumb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  background:
+    linear-gradient(45deg, var(--surface-soft) 25%, transparent 25%) 0 0 / 12px 12px,
+    linear-gradient(-45deg, var(--surface-soft) 25%, transparent 25%) 0 0 / 12px 12px,
+    var(--white);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.s-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.s-thumb.is-broken::after {
+  content: '读不出来';
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.s-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.s-name {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.s-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.s-actions button {
+  flex: 1;
+  padding: 6px 4px;
+  border-radius: 9px;
+  border: 1px solid var(--accent-line);
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.s-actions button:hover {
+  background: var(--accent-soft);
+}
+
+.s-actions button.is-primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--white);
+}
+
+.s-actions button.is-primary:hover {
+  background: var(--accent-deep);
+}
+
+.s-actions button.is-danger {
+  color: var(--danger);
+}
+
+.s-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.s-empty {
+  grid-column: 1 / -1;
+  padding: 36px 12px;
+  border: 1px dashed var(--accent-line);
+  border-radius: 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* 大图 */
+.s-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 32px 32px;
+  background: rgba(24, 30, 38, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.s-lightbox[hidden] {
+  display: none;
+}
+
+.s-lightbox img {
+  max-width: 86vw;
+  max-height: 72vh;
+  border-radius: 14px;
+  background: var(--white);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.s-lightbox p {
+  margin: 0;
+  max-width: 86vw;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.s-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--white);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* 素材包管理：工具行、分组与行内启停/删除 */
+.s-toolbar .s-meta {
+  flex: 1;
+  text-align: right;
+}
+
+.s-toolbar .s-meta.is-error {
+  color: var(--danger);
+}
+
+.s-toolbar button.is-primary {
+  padding: 6px 16px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--white);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.s-toolbar button.is-primary:hover {
+  background: var(--accent-deep);
+}
+
+.s-toolbar button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.s-pack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.s-pack-head {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.s-pack-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 4px 12px var(--accent-shadow);
+}
+
+.s-pack-row.is-broken {
+  border-color: var(--danger);
+}
+
+.s-pack-thumb {
+  display: flex;
+  flex: 0 0 52px;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.s-pack-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.s-pack-thumb.is-broken::after {
+  content: '!';
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.s-pack-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.s-pack-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.s-badge {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.s-badge.is-ok {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+.s-badge.is-danger {
+  background: transparent;
+  color: var(--danger);
+}
+
+.s-pack-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.s-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.s-switch input {
+  accent-color: var(--accent);
+}
+
+.s-auto-approve {
+  margin-bottom: 10px;
+}
+
+.s-pack-actions button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.s-pack-actions button.is-danger {
+  color: var(--danger);
+}
+
+.s-pack-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' file: data: pet-media:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
+    <title data-i18n="ability.title">桌宠 · 能力中心</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./ability.css" />
+  </head>
+  <body>
+    <header class="a-head">
+      <div class="a-head-text">
+        <h1 data-i18n="ability.heading">能力中心</h1>
+        <p data-i18n="ability.lead">每一项都对应本机真实能力；还没接好的会直接标出来，不做假入口。</p>
+      </div>
+      <button type="button" id="a-close" class="a-close" data-i18n-aria-label="ability.close" aria-label="关闭">×</button>
+    </header>
+
+    <main class="a-body">
+      <section class="a-grid" id="a-grid" data-i18n-aria-label="ability.grid" aria-label="能力列表">
+        <button type="button" class="a-card" data-action="rps">
+          <span class="a-icon" aria-hidden="true">✊</span>
+          <span class="a-name" data-i18n="ability.rps">猜拳</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.rpsHint">点开下一局</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="models">
+          <span class="a-icon" aria-hidden="true">▦</span>
+          <span class="a-name" data-i18n="ability.models">素材库</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.modelsHint">查看表情与立绘</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="stickers">
+          <span class="a-icon" aria-hidden="true">♪</span>
+          <span class="a-name" data-i18n="ability.stickers">表情包</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.stickersHint">审核偷来的图</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="insight">
+          <span class="a-icon" aria-hidden="true">◍</span>
+          <span class="a-name" data-i18n="ability.insight">观察台</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.insightHint">看她此刻的样子</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="memory">
+          <span class="a-icon" aria-hidden="true">✦</span>
+          <span class="a-name" data-i18n="ability.memory">记忆</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.memoryHint">打开记忆面板</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="voice">
+          <span class="a-icon" aria-hidden="true">♪</span>
+          <span class="a-name" data-i18n="ability.voice">语音</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.voiceHint">打开语音面板</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="balance">
+          <span class="a-icon" aria-hidden="true">¥</span>
+          <span class="a-name" data-i18n="ability.balance">余额</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.balanceHint">点击查询一次</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="daily">
+          <span class="a-icon" aria-hidden="true">☾</span>
+          <span class="a-name" data-i18n="ability.daily">每日巡视</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.dailyHint">立即汇总今天</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="reflection">
+          <span class="a-icon" aria-hidden="true">✎</span>
+          <span class="a-name" data-i18n="ability.reflect">反思</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.reflectHint">整理今天的三条印象</span>
+        </button>
+
+        <button type="button" class="a-card" disabled data-action="calibrate">
+          <span class="a-icon" aria-hidden="true">◎</span>
+          <span class="a-name" data-i18n="ability.calibrate">校准</span>
+          <span class="a-hint" data-i18n="ability.calibrateHint">尚未接入（E6）</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="status">
+          <span class="a-icon" aria-hidden="true">◔</span>
+          <span class="a-name" data-i18n="ability.status">运行状态</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.statusHint">打开启动前体检</span>
+        </button>
+      </section>
+
+      <section class="a-panel" id="rps-panel" hidden>
+        <div class="a-panel-head">
+          <h2 data-i18n="ability.rps">猜拳</h2>
+          <span class="a-note" data-i18n="ability.rpsNote">战绩存在本地，重开还在</span>
+        </div>
+        <div class="a-rps-actions">
+          <button type="button" data-choice="rock" data-i18n="ability.rock">石头</button>
+          <button type="button" data-choice="paper" data-i18n="ability.paper">布</button>
+          <button type="button" data-choice="scissors" data-i18n="ability.scissors">剪刀</button>
+          <button type="button" id="rps-reset" class="a-ghost" data-i18n="ability.rpsReset">清空战绩</button>
+        </div>
+        <p class="a-note" id="rps-result" data-i18n="ability.rpsIdle">还没出拳。</p>
+        <p class="a-note" id="rps-stats" data-i18n="ability.rpsStats">战绩：0 局</p>
+      </section>
+
+      <section class="a-panel" id="assets-panel" hidden>
+        <div class="a-panel-head">
+          <h2 data-i18n="ability.models">素材库</h2>
+          <span class="a-note" id="assets-note" data-i18n="ability.assetsEmpty">还没读取</span>
+        </div>
+        <div class="a-asset-groups" id="assets-groups">
+          <p class="a-note" data-i18n="ability.assetsEmptyFull">还没读取。</p>
+        </div>
+      </section>
+
+      <section class="a-log">
+        <div class="a-log-head">
+          <h2 data-i18n="ability.log">操作结果</h2>
+          <button type="button" id="a-clear-log" class="a-ghost" data-i18n="ability.clear">清空</button>
+        </div>
+        <div class="a-log-list" id="a-log" data-i18n="ability.logEmpty">还没有操作。</div>
+      </section>
+    </main>
+
+    <script src="./ability.js"></script>
+  </body>
+</html>

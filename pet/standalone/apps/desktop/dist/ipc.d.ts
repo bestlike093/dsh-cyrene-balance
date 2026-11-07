@@ -1,0 +1,18 @@
+/** 主进程↔渲染进程唯一允许的通道清单。新增能力必须同时改这里和 preload。 */
+export declare const IPC_CHANNELS: readonly ["pet:ask", "pet:approve", "pet:reportTask", "pet:settings:get", "pet:settings:save", "pet:settings:open", "pet:settings:close", "pet:settings:minimize", "pet:settings:toggleMaximize", "pet:factory:reset", "pet:qq:test", "pet:qq:status", "pet:qq:bind-owner", "pet:window:setClickThrough", "pet:window:setAlwaysOnTop", "pet:window:move", "pet:window:applySize", "pet:window:getSize", "pet:window:dragStart", "pet:window:dragEnd", "pet:render:report", "pet:render:info", "pet:diagnostics:collect", "pet:models:list", "pet:models:active", "pet:models:import", "pet:models:setActive", "pet:models:openFolder", "pet:balance:query", "pet:balance:ack", "pet:menu:context", "pet:vault:diagnose", "pet:vault:export", "pet:vault:import", "pet:vault:rotate", "pet:backup:getConfig", "pet:backup:chooseDir", "pet:backup:setKeep", "pet:backup:run", "pet:backup:setAuto", "pet:backup:findLatest", "pet:backup:probe", "pet:secrets:set", "pet:secrets:masked", "pet:secrets:clear", "pet:voice:speak", "pet:voice:status", "pet:chat:send", "pet:chat:history", "pet:chat:status", "pet:chat:clear", "pet:chat:export", "pet:chat:open", "pet:chat:close", "pet:photo:take", "pet:memory:stats", "pet:memory:facts", "pet:memory:facts:remove", "pet:memory:facts:update", "pet:memory:facts:export", "pet:memory:facts:import", "pet:memory:list", "pet:memory:delete", "pet:memory:pin", "pet:memory:export", "pet:memory:clear", "pet:preflight", "pet:status:summary", "pet:daily:run", "pet:daily:last", "pet:reflection:run", "pet:presence:speak", "pet:ability:open", "pet:game:open", "pet:game:rps", "pet:game:detect", "pet:game:schedule:get", "pet:game:schedule:save", "pet:game:dry-run", "pet:game:daily:state", "pet:game:daily:update", "pet:game:daily:plan", "pet:game:daily:apply", "pet:game:daily:query", "pet:game:daily:disable", "pet:game:daily:runs", "pet:game:assistant:status", "pet:game:assistant:confirm", "pet:game:assistant:disable", "pet:game:assistant:record", "pet:game:assistant:claim", "pet:game:assistant:rank", "pet:game:assistant:plan", "pet:assets:list", "pet:packs:list", "pet:packs:import", "pet:packs:remove", "pet:packs:setEnabled", "pet:sticker:inbox", "pet:sticker:library", "pet:sticker:approve", "pet:sticker:reject", "pet:sticker:open", "pet:sticker:send", "pet:persona:preview", "pet:system:stats", "pet:presence:mood", "pet:companion:agenda", "pet:companion:agenda:reschedule", "pet:insight:open", "pet:insight:snapshot", "pet:insight:set-favor", "pet:insight:adjust-favor", "pet:insight:lock-favor", "pet:insight:reset-scope", "pet:insight:delete-memory", "pet:voice:pickRefAudio", "pet:wake:status", "pet:wake:install", "pet:wake:remove", "pet:wake:setEnabled", "pet:llm:test", "pet:sync:run", "pet:sync:info", "pet:sync:chooseDir", "pet:sync:setPassphrase", "pet:sync:clearPassphrase", "pet:sync:passphraseStatus"];
+export type IpcChannel = (typeof IPC_CHANNELS)[number];
+export declare function isAllowedChannel(channel: string): channel is IpcChannel;
+/** 白名单外一律 PERMISSION_DENIED，不区分「拼错」和「越权」。 */
+export declare function assertChannel(channel: string): asserts channel is IpcChannel;
+export interface IpcRequest {
+    readonly channel: string;
+    readonly payload?: unknown;
+}
+export type IpcHandler = (payload: unknown) => Promise<unknown>;
+/** 通道路由：只接受已注册 + 白名单内的调用，其余给稳定错误码。 */
+export declare class IpcRouter {
+    private readonly handlers;
+    handle(channel: IpcChannel, handler: IpcHandler): () => void;
+    invoke(request: IpcRequest): Promise<unknown>;
+    channels(): readonly IpcChannel[];
+}

@@ -1,0 +1,8 @@
+{
+  "name": "cyrene-pet-standalone",
+  "version": "2.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "昔涟桌宠主进程（独立版原样内置，供 DSH 插件调用）",
+  "main": "apps/desktop/electron/main.mjs"
+}

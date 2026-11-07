@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "dsh-cyrene-pet",
+  "name": "昔涟桌宠",
+  "version": "2.0.0",
+  "description": "把独立版桌宠整体内置进宿主：主进程、渲染层、模型、记忆、贴纸与日常面板共用同一份实现。",
+  "author": "bestlike093",
+  "entry": "index.cjs",
+  "defaultEnabled": true
+}

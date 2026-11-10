@@ -2,7 +2,6 @@
 
 昔涟桌面桌宠的 DeepSeek Harness（DSH）版：透明置顶窗口、拖拽贴边、点击穿透、气泡台词、状态面板、右键菜单，并接管对话提问、风险审批与任务进程。2.0 起加入九张内置背景、陪伴数据同步与设置合并，以及 QQ 官方机器人远程拍板；形象可换成单图 / GIF / 视频 / 多帧 sprite，也可以切成不加载立绘的卡片模式。但是必须注意，为了对轴，这版并不稳定
 
-
 > 仓库名 `dsh-cyrene-balance` 是它最早做余额插件时留下的，包名与插件目录已经改成 `dsh-cyrene-pet`。安装时认包名和目录，不认仓库名。
 
 - 作者：**bestlike093**
@@ -28,6 +27,8 @@
 | 少被打扰、只看余额 | 常见场景怎么设、气泡模式 |
 | 在手机上处理审批 | QQ 远程拍板 |
 | 数据存在哪、怎么备份 | 数据文件、备份与恢复 |
+| 想了解她怎么说话、怎么记事 | 架构总览、内部实现与审计结论 |
+| 想了解已知问题与修复计划 | 内部实现与审计结论 |
 | 出问题了 | 常见问题、Agent（dsh）升级后可能产生的后果 |
 
 ## 五分钟上手
@@ -87,6 +88,284 @@
 | 风险审批（`approval/request`）：桌宠里「允许一次 / 拒绝」 | ✅ |
 | 任务进程：读 `todos` 投影，长按播报当前进度 | ✅ |
 | 系统托盘 | ✅（无托盘图标资源时自动跳过） |
+
+## 架构总览
+
+桌宠分成两层：`lib/` 跑在 dsh 进程里，管设置、余额、会话桥、提问审批、QQ 通道；`pet/` 是独立的 Electron 窗口，只管画立绘、接鼠标、气泡和设置面板。一次对话走五段：输入归一化 → 状态写入与存储 → 召回与拼装 → 模型 → 输出与回写。
+
+下面三张图出自 2026-11-10 的全链路审计，按真实调用点绘制，不以注释和命名判断。**实线是通的，虚线是空转或断点。**
+
+### 主链路
+
+```mermaid
+flowchart LR
+  subgraph IN[输入]
+    A1[桌面 IPC / 桌面 /send]
+    A2[QQ 桥 私聊 + 群]
+    A3[DSH 会话]
+    A4[识屏 / 天气 / IP / 余额]
+    A5[图片]
+  end
+
+  subgraph NORM[归一化]
+    B[text / spoken / scope / source / speaker]
+  end
+
+  subgraph STATE[状态写入]
+    C1[记忆抽取<br/>六类句式]
+    C2[结构化事实<br/>inner-state 断言]
+    C3[关系事件<br/>bond / closeness / irritation]
+    C4[精力结算<br/>body]
+    C5[日程 ensure<br/>agenda]
+    C6[情绪识别<br/>local-emotion]
+    C7[群画像 / 梗库]
+  end
+
+  subgraph STORE[存储]
+    D1[(memory.json<br/>明文)]
+    D2[(facts.json 加密)]
+    D3[(bond.json 加密)]
+    D4[(body.json 加密)]
+    D5[(agenda-runtime.json)]
+    D6[afterglow / needs]
+    D7[lastEmotionText]
+  end
+
+  subgraph RECALL[召回]
+    E1[memoryText<br/>默认关闭]
+    E2[factNote]
+    E3[affinityNote]
+    E4[bodyNote]
+    E5[companionNote<br/>心情/日程/话头/表情]
+    E6[reviewNote<br/>仅 QQ]
+    E7[intimacyNote<br/>仅桌面]
+    E8[socialNote<br/>随句变化]
+  end
+
+  subgraph PROMPT[开口拼装]
+    F[buildPromptSections<br/>stable + turn]
+    F1[stable：persona 无上限 + source 200 + social 300]
+    F2[turn：memory 600 / fact 400 / companion 500<br/>affinity 200 / review 200 / body 200<br/>intimacy 420 / proactive 200 / sticker 300]
+  end
+
+  subgraph MODEL[模型]
+    G[DeepSeek 请求<br/>7 路并发取数，memoryText 无超时]
+  end
+
+  subgraph OUT[输出]
+    H1[parseEmojiTag<br/>图:id]
+    H2[parseStickerTag<br/>表情:标签]
+    H3[guardReply<br/>清控制标签 / 并复读]
+    H4[群聊引用归属纠正]
+    H5[filterIntimacy 红线]
+    H6[气泡 / 立绘 / TTS]
+    H7[QQ splitReply<br/>≥90 字拆 2 条]
+  end
+
+  subgraph BACK[回流]
+    I1[historyTurns + persistTurn]
+    I2[onExchange 记忆写入]
+    I3[companion.endTurn<br/>话头 / 表情降权]
+  end
+
+  A1 --> B
+  A2 --> B
+  A3 --> B
+  A4 --> B
+  A5 -.不进模型.-> X1[空转：入表情库]
+  B --> C1 --> D1 --> E1
+  B --> C2 --> D2 --> E2
+  B --> C3 --> D3 --> E3
+  B --> C4 --> D4 --> E4
+  B --> C5 --> D5 --> E5
+  B --> C6 --> D6 --> E5
+  C6 --> D7 -.无读取.-> X2[空转]
+  B --> C7 --> E8
+  E1 --> F
+  E2 --> F
+  E3 --> F
+  E4 --> F
+  E5 --> F
+  E6 --> F
+  E7 --> F
+  E8 --> F1
+  F --> F1
+  F --> F2
+  F1 --> G
+  F2 --> G
+  G --> H1
+  G --> H2
+  H1 --> H3
+  H2 --> H3
+  H3 --> H4 --> H5
+  H5 --> H6
+  H5 --> H7
+  H5 --> I1
+  H5 --> I2
+  H5 --> I3
+  I3 -.下一轮.-> E5
+```
+
+`memoryText` 在早期草稿里被记成「恒空」，第四轮补审后修正为「默认关闭」：开关打开后链路是通的，只是回写不等待，也没有超时。图里其余断点（图片不进模型、`lastEmotionText` 无读取方）均在代码里可复核。
+
+### 单轮数据流
+
+同一轮对话拆得更细，标出了每一处断点在代码里的位置。
+
+```mermaid
+flowchart TB
+  subgraph IN[输入]
+    I1[桌面 IPC / send]
+    I2[QQ webhook / bridge]
+    I3[主动开口]
+    I4[图片]
+  end
+
+  subgraph GATE[入口与闸门]
+    G1[scopeOf<br/>desktop / qq:private / qq:group]
+    G2[enabled / provider / busy / rate / budget / key]
+    G3[matchWake → spoken]
+  end
+
+  subgraph READ[并行取数]
+    R1[historyTurns = bucketFor scope]
+    R2[getMemoryDigest<br/>BM25 + 可选向量]
+    R3[companion.beginTurn]
+    R4[fact / affinity / body / intimacy / social / sticker]
+    R5[getCompanionExtra<br/>日程 / 承接 / 穿搭 / 环境]
+  end
+
+  subgraph BUILD[拼装]
+    B1[buildPromptSections<br/>stable + turn]
+    B2[system + trimTurns history + user]
+  end
+
+  subgraph MODEL[模型]
+    M1[DeepSeek chat completions]
+    M2[工具轮循环<br/>共享 AbortController]
+  end
+
+  subgraph CLEAN[清洗]
+    C1[parseEmojiTag]
+    C2[parseStickerTag]
+    C3[guardReply]
+    C4[cleanVoice]
+    C5[fixMisattributedQuote]
+    C6[filterIntimacy]
+  end
+
+  subgraph SINK[输出与回写]
+    S1[气泡 / 立绘]
+    S2[TTS planSpeak]
+    S3[QQ splitReply]
+    S4[historyTurns.push]
+    S5[companion.endTurn]
+    S6[onExchange async 未 await]
+    S7[persistTurn 同步调用]
+    S8[QQ 主动开口不拆]
+    S9[stickerNote 混排]
+  end
+
+  subgraph AUX[支线数据流]
+    A1[社交画像 / 梗词典<br/>getSocialNote 每条群消息同步跑]
+    A2[B 站 API / 写动作 / 动态]
+    A3[设置同步 sync + syncCrypto]
+    A4[日程 daily-plan / agenda-runtime / moment-clock]
+  end
+
+  I1 --> G1
+  I2 --> G1
+  I3 --> G1
+  I4 -.不进模型.-> X1[stickerInbox]
+  G1 --> G2
+  G2 --> G3
+  G3 --> R1
+  G3 --> R2
+  G3 --> R3
+  G3 --> R4
+  G3 --> R5
+  R1 --> B2
+  R2 --> B1
+  R3 --> B1
+  R4 --> B1
+  R5 --> B1
+  B1 --> B2
+  B2 --> M1
+  M1 --> M2
+  M2 --> C1
+  C1 --> C2
+  C2 --> C3
+  C3 --> C4
+  C4 --> C5
+  C5 --> C6
+  C6 --> S1
+  C6 --> S2
+  C6 --> S3
+  C6 --> S4
+  C6 --> S5
+  C6 --> S6
+  C6 --> S7
+  S4 -.下一轮.-> R1
+  S5 -.下一轮.-> R3
+  S6 -.下一轮.-> R2
+  S7 -.重启.-> R1
+  G2 -.检查与置位之间有 6 个 await.-> X2[并发窗口]
+  R2 -.无超时.-> X3[整轮悬挂]
+  S6 -.async 未 await.-> X4[记忆写丢 / 异常逃逸]
+  R1 -.桶永不释放.-> X5[内存累积]
+  S7 -.hydrate 丢 scope.-> X6[assistant 归桌面]
+  R2 -.memoryEnabled 默认 false.-> X7[默认无长期记忆]
+  G1 -.openId 为空.-> X8[同类型会话共桶]
+  C6 -.主动开口.-> S8
+  S3 -.汇报拼在 reply 后.-> S9
+  S3 -.首条成功补发失败.-> X9[部分发送记成功]
+  R4 -.每条群消息.-> A1
+  A1 -.O(k²) 同步计算.-> X10[群消息阻塞主进程]
+  A1 -.重复 observe 同批样本.-> X11[词典 seen 虚高]
+  A2 -.policy 缺省.-> X12[写操作崩溃]
+  A3 -.apply 后才 ack.-> X13[崩溃窗口重复合并]
+  A4 -.质量闸只查总时长.-> X14[偏移的一天能过]
+```
+
+主链本身是通的，真正的断点在「等待与互斥」：`busy` 的检查与置位之间夹着 6 个 `await`；记忆摘要没有超时；`onExchange` 是 async 却没有 `await`。记忆链的默认状态是断的，因为 `companion.memory.enabled` 默认 `false`。
+
+### 人格层链路
+
+人格提示词确实在驱动参数，但这条管道是单向的：参数从不回流到提示词。七段决定「她是谁」，7 个参数只决定「她多久开口、多久消气、好感涨多快」。
+
+```mermaid
+flowchart LR
+  subgraph IN[人格输入]
+    P1[七段：身份 / 身世 / 世界观<br/>人生观 / 价值观 / 相处 / 表达]
+    P2[昵称]
+    P3[记忆 8 条 × 200 字]
+    P4[额外说明]
+    P5[此刻：心情 / 关系阶段<br/>烦躁 / 精力]
+  end
+
+  P1 --> B[buildPersonaPrompt]
+  P2 --> B
+  P3 --> B
+  P4 --> B
+  P5 --> B
+  B --> TXT[完整提示词文本]
+  TXT --> LLM[模型]
+  TXT --> D[deriveTraits<br/>5 类关键词]
+  D --> T8[7 个速度参数<br/>+ recallBias]
+  Q[六维问卷 24 题] --> QD[traitsFromDimensions]
+  QD --> T8
+  T8 --> R[runtime traitsNow]
+  R --> SCH[开口间隔 / 精力消耗<br/>好感涨速 / 消气 / 亲近门槛]
+  R --> NOW[烦躁档判定]
+  Q -.只显示草稿.-> UI[设置页 personaDraft]
+  P3 -.关键词污染.-> D
+  P4 -.关键词污染.-> D
+  P5 -.关键词污染.-> D
+```
+
+问卷六维被压成同一组参数，`personaDraft` 只显示、不回填。代码里的「8 个维度」是 7 个速度参数加 1 个念旧倾向，全部是节奏维度，没有表达形态维度。
+
+反思 / 召回 / 筛选 / 选择 / 时间那张专题图更细，留在审计台账里。
 
 ## 开发与测试
 
@@ -734,6 +1013,66 @@ QQ 里收到的图不会直接进素材包：
 | 配置 | `cordis.patch.yml` | 设置浮层 + `state.json` |
 | 提问 / 审批 / 任务 | 无 | 全部接管 |
 | 包名 | `dsh-cyrene-balance` | `dsh-cyrene-pet` |
+
+## 内部实现与审计结论
+
+这一节记录 2026-11-10 对 v2.0.0 的一次全链路审计。审计沿数据流逐格核对，只看真实调用点，不以注释和命名判断；问题编号分 `IN-`（输入）、`MEM-`（记忆与陪伴）、`SYS-`（系统）、`OUT-`（输出）四组，状态分「合格」「已确认」「待确认」。完整台账与逐条证据在源码仓库的 `docs/audits/2026-11-10-项目审计总账.md`。
+
+### 总体判断
+
+主链路是通的：输入 → 归一化 → 状态写入 → 召回拼装 → 模型 → 五道清洗 → 气泡 / TTS / QQ / 回写。问题集中在三处——同一语义有多套并行实现、默认值让闸门失效、回写是单向的。单条修能改善体感，不解决「谁是唯一真源」，下一轮还会长出同样的分叉。
+
+### 六个系统性病灶
+
+| 病灶 | 具体表现 |
+| --- | --- |
+| 同一语义多套实现 | 记忆三套、关系两套、情绪四套、时间四套、词库四套，接口之间没有唯一真源 |
+| 衰减与裁剪方向反了 | `decay` 重复扣（越聊越淡）、`trim` 留归档丢活跃、`clampSection` 从头截、`affinity` 先丢对方态度 |
+| 默认值让闸门失效 | `confidence` 默认 0.7 让 `unsure` 恒空；主人好感起点 60–70 让关系阶段只剩天数；`dailyCap` 让 `minGapMs` 形同虚设 |
+| 写得多，读得少 | 13 槽只有 4 槽有写入入口、6 槽没有入口；反思只写不读；天气、识屏、余额只在主动开口出现 |
+| 预算与优先级错位 | 11 段单项预算、没有总预算；`affinity` 200 字先截掉最有用的两行；`companion` 500 字先死表情候选 |
+| 注释与代码脱节 | 「四维」实为三维；`CUE_KINDS` 说顺序即优先级，实际是加权随机；`trim` 注释与实现相反 |
+
+### 修复顺序
+
+**P0：方向反了，先停损。**
+
+1. `decay` 改成按「上次结算点到现在的增量」扣，不再每次调用都按总天数全量扣
+2. `trim` 保留活跃条目，不再优先丢活跃的弱记忆
+3. 主人好感起点降到阶段门槛以下，或把阶段分数改成归一化值
+4. `affinity` 与 `companion` 的裁剪顺序倒过来，先保「对方刚才的态度」和表情候选
+5. 11 段单项预算之外补一个总预算，先定义「这一轮最该让她知道什么」
+
+**P1：接通断掉的通道。**
+
+- 人格参数推导不再读记忆、额外说明与「此刻」，避免关键词污染 `deriveTraits`
+- 六维问卷的结果回填到行为，不只改开口间隔
+- 记忆回写加上 `await` 与超时；`memoryText` 开启后不再恒空
+- `knowledge` 不再静默改名为 `preference`
+- 反思结果接回下一轮，不再只落盘
+- 情绪与身体状态接进开口闸门
+
+**P2：人格结构与契约。**
+
+补关系姿态（主人 / 熟人 / 生人 / 群聊的距离感）、冲突与修复（被冒犯后怎么冷、怎么道歉、怎么和好）、表达形态（句长、语气词、比喻、反问、标点）与知识边界句式；13 槽补齐或明确砍掉；两套 prompt 构建器与两套关系档表收敛。
+
+**P3：清洁与文档。**
+
+`.bak` 清理、注释口径统一（四轴 / 五轴、六段 / 七段）、过时文档结论、输出层 `busy` 与 QQ 连发策略。
+
+### 审计时未确认的入口
+
+台账里有 15 条「待确认」，需要打开真实入口才能定论。影响最大的几条：
+
+| 编号 | 待确认 |
+| --- | --- |
+| MEM-055 | `CompanionCore` 是否真的导出 `onUserMessage`；不存在则桌面陪伴层整条静默失效 |
+| OUT-001 | QQ 与桌面是否共用同一个 `chatService` 实例 |
+| MEM-017 | 向量检索是否默认关闭，实际走意图还是向量 |
+| MEM-097 | body 是否在别的层接进了开口闸 |
+| MEM-127 | 桌宠 `settings.json` 与 DSH `state` 是否同一份人格参数 |
+
+> 这一节记录的是审计基线，不随每次发版自动更新。已修复的条目会在台账里改成「合格」并保留原编号，方便对照。
 
 ## 已知限制
 

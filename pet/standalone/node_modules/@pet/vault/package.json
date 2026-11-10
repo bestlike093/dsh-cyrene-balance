@@ -1,0 +1,27 @@
+{
+  "name": "@pet/vault",
+  "version": "2.0.0-dev.0",
+  "type": "module",
+  "description": "加密仓库：密钥派生、封装、完整性校验、迁移。只做密码学，不碰业务字段",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@pet/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@noble/ciphers": "^2.4.0"
+  }
+}

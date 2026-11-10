@@ -20,6 +20,9 @@ const MAX_TOTAL_BYTES = 512 * 1024 * 1024
 /** 单个模型目录扫描深度上限。 */
 const MAX_DEPTH = 6
 
+/** Windows 保留设备名：con.txt 这类带后缀的同样建不出目录，按点前部分判断。 */
+const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+
 /** 目录名只保留安全字符，避免拼路径时带出分隔符。 */
 function sanitizeId(raw, fallback) {
   const base = (raw ?? '').trim().replace(/\.model3\.json$/i, '')
@@ -28,6 +31,9 @@ function sanitizeId(raw, fallback) {
     .replace(/^\.+$/, '')
     .slice(0, 64)
     .trim()
+  // con / aux / nul / com1 这类名字在 Windows 上根本建不出目录，等落盘才炸就晚了；
+  // 视同空名走 fallback，让调用方换个名字。
+  if (WINDOWS_RESERVED_NAMES.test(cleaned.split('.')[0])) return fallback
   return cleaned.length > 0 ? cleaned : fallback
 }
 
@@ -66,6 +72,17 @@ async function findModelFiles(dir, depth = 0) {
     }
   }
   return found
+}
+
+/**
+ * 取最浅的 model3.json：层级按路径分隔符数量算，同深度按路径字典序，结果确定。
+ * 不用路径字符串长度当代价：长目录名会把「更浅」的候选挤到后面。
+ */
+function pickShallowestModel(files) {
+  const depthOf = (file) => (file.match(/[\\/]/g) ?? []).length
+  return files
+    .slice()
+    .sort((a, b) => depthOf(a) - depthOf(b) || a.localeCompare(b))[0]
 }
 
 /** 读 model3.json 里的显示名，读不到就用目录名。 */
@@ -125,7 +142,7 @@ export function createModelStore({ root, log = () => {} }) {
       if (files.length === 0) continue
 
       // 同一模型目录里可能躺着多份 model3.json（作者留的旧版本），取最浅的那份。
-      const modelFile = files.sort((a, b) => a.length - b.length)[0]
+      const modelFile = pickShallowestModel(files)
       const check = await validateModel(modelFile)
       const displayName = (await readModelName(modelFile)) ?? entry.name
 
@@ -182,7 +199,7 @@ export function createModelStore({ root, log = () => {} }) {
       throw new Error('导入后找不到 model3.json')
     }
 
-    const modelFile = files.sort((a, b) => a.length - b.length)[0]
+    const modelFile = pickShallowestModel(files)
     const check = await validateModel(modelFile)
     if (!check.ok) {
       await fs.rm(target, { recursive: true, force: true })
@@ -208,7 +225,7 @@ export function createModelStore({ root, log = () => {} }) {
     if (files.length === 0) {
       throw new Error('这个文件夹里没有 .model3.json')
     }
-    const modelFile = files.sort((a, b) => a.length - b.length)[0]
+    const modelFile = pickShallowestModel(files)
     const modelDir = path.dirname(modelFile)
     log('[models] 文件夹导入，模型根 =', modelDir)
 
@@ -237,22 +254,25 @@ export function createModelStore({ root, log = () => {} }) {
         if (normalized.startsWith('/') || normalized.split('/').includes('..')) {
           throw new Error(`压缩包内路径非法：${entry.entryName}`)
         }
-        const baseName = path.basename(normalized)
-        if (isSkippable(baseName)) continue
+        // 逐条目解压而不是 extractAllTo：extractAllTo 会把跳过的条目也解出来，
+        // 只对非 SKIP 条目累计的上限就形同虚设。任何一段命中 SKIP 的路径
+        // （__MACOSX/、.DS_Store、.psd……）这次真的不落盘。
+        if (normalized.split('/').some((segment) => isSkippable(segment))) continue
+        if (entry.isDirectory) continue
         total += entry.header.size
         if (total > MAX_TOTAL_BYTES) {
           throw new Error('压缩包解压后超过 512MB，已中止')
         }
+        const target = path.join(staging, ...normalized.split('/'))
+        await fs.mkdir(path.dirname(target), { recursive: true })
+        zip.extractEntryTo(entry, path.dirname(target), false, true)
       }
-
-      // extractAllTo 会自己处理目录层级；上面已经逐个校验过路径。
-      zip.extractAllTo(staging, true)
 
       const files = await findModelFiles(staging)
       if (files.length === 0) {
         throw new Error('压缩包里没有 .model3.json')
       }
-      const modelFile = files.sort((a, b) => a.length - b.length)[0]
+      const modelFile = pickShallowestModel(files)
       const modelDir = path.dirname(modelFile)
       log('[models] zip 导入，模型根 =', modelDir)
 

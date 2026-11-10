@@ -35,6 +35,7 @@ const IMPULSE_BY_EMOTION = {
  *
  * 只在当前这一轮没有明确情绪时用它兜底；两个值都接近零就保持 neutral，
  * 免得一个空状态被读成「没力气」。
+ * 负效价里用唤醒度区分愤怒与难过：高唤醒是生气，低唤醒才是委屈。
  */
 export function emotionFromAfterglow(snapshot) {
   if (snapshot === null || typeof snapshot !== 'object') return 'neutral'
@@ -43,7 +44,7 @@ export function emotionFromAfterglow(snapshot) {
 
   if (Math.abs(valence) < 0.08 && arousal < 0.12) return 'neutral'
   if (valence >= 0.25) return arousal >= 0.65 ? 'excited' : 'happy'
-  if (valence <= -0.25) return 'sad'
+  if (valence <= -0.25) return arousal >= 0.65 ? 'angry' : 'sad'
   if (arousal >= 0.7) return 'surprised'
   if (arousal <= 0.15) return 'tired'
   return 'neutral'
@@ -52,6 +53,11 @@ export function emotionFromAfterglow(snapshot) {
 function clampNumber(value, min, max, fallback) {
   if (!Number.isFinite(value)) return fallback
   return Math.min(max, Math.max(min, value))
+}
+
+/** 布尔开关：只认真值；'true'、1、'1' 等旧配置形态按开启，其余一律关闭。 */
+function asBool(value) {
+  return value === true || value === 1 || value === '1' || value === 'true'
 }
 
 function readEmotionSettings(getSettings) {
@@ -67,18 +73,20 @@ function readEmotionSettings(getSettings) {
   const expression = value.expression !== null && typeof value.expression === 'object' ? value.expression : {}
   const needs = value.needs !== null && typeof value.needs === 'object' ? value.needs : {}
 
+  // 半衰期只有真数字才参与夹取；null / '' / 缺失一律回默认 30 分钟，
+  // 绝不把「没填」读成 1 分钟的最快回落。
+  const halfLifeRaw = Number(afterglow.halfLifeMinutes)
+  const halfLifeMinutes = Number.isFinite(halfLifeRaw) && String(afterglow.halfLifeMinutes ?? '').trim() !== ''
+    ? clampNumber(halfLifeRaw, MIN_HALF_LIFE_MINUTES, MAX_HALF_LIFE_MINUTES, DEFAULT_HALF_LIFE_MINUTES)
+    : DEFAULT_HALF_LIFE_MINUTES
+
   return {
     afterglow: {
-      enabled: afterglow.enabled === true,
-      halfLifeMinutes: clampNumber(
-        Number(afterglow.halfLifeMinutes),
-        MIN_HALF_LIFE_MINUTES,
-        MAX_HALF_LIFE_MINUTES,
-        DEFAULT_HALF_LIFE_MINUTES
-      )
+      enabled: asBool(afterglow.enabled),
+      halfLifeMinutes
     },
     expressionGroup: EXPRESSION_GROUPS.has(expression.group) ? expression.group : 'off',
-    needsEnabled: needs.enabled === true
+    needsEnabled: asBool(needs.enabled)
   }
 }
 
@@ -141,6 +149,7 @@ export function createEmotionRuntime(options = {}) {
     try {
       const config = sync()
       const emotion = typeof turn.emotion === 'string' ? turn.emotion : 'neutral'
+      // 余波与需求是两把独立开关：余波开着、需求关着，只做刺激不满足需求。
       if (config.afterglow.enabled && afterglow !== null) {
         afterglow.impulse(IMPULSE_BY_EMOTION[emotion] ?? IMPULSE_BY_EMOTION.neutral)
       }
@@ -161,6 +170,21 @@ export function createEmotionRuntime(options = {}) {
   }
 
   /**
+   * 她真的在休息（睡着了 / 深夜安静时段）：休息需求被满足一点。
+   *
+   * 没有这个出口，rest 只会自然回升、永远等不到满足，约 6 小时后
+   * shouldHoldBackOpening 恒真，主动开口永久停摆。主进程在睡眠窗口内按拍调用。
+   */
+  function noteRest(amount = 0.06) {
+    try {
+      const config = sync()
+      if (config.needsEnabled && needs !== null) needs.satisfy('rest', amount)
+    } catch (error) {
+      log('需求状态记录休息失败', error)
+    }
+  }
+
+  /**
    * 决定这次用哪张表情。
    *
    * 返回 `{ tag, group, changed }`；只有 experiment 组会真的换，
@@ -170,21 +194,37 @@ export function createEmotionRuntime(options = {}) {
     try {
       const config = sync()
       const base = typeof emotion === 'string' && emotion !== '' ? emotion : 'neutral'
-      const residual =
+      // 余波只在「这一轮没有明确情绪」时兜底，但不该被表情实验的分组门控。
+      // 实验决定的是「要不要按情绪换脸」，余波决定的是「换完怎么退烧」，
+      // 两件事分开之后，实验关着也不会让余波失效。
+      const afterglowTag =
         base === 'neutral' && config.afterglow.enabled && afterglow !== null
           ? emotionFromAfterglow(afterglow.snapshot())
-          : base
-      if (expression === null) return { tag: base, group: 'off', changed: false, emotion: base }
+          : 'neutral'
+      const residual = afterglowTag !== 'neutral' ? afterglowTag : base
+      // sync() 保证 expression 一定已初始化，这里直接使用。
 
       const decision = expression.decide(residual)
-      // off 与 control 都保持调用方原本要用的表情，只有 experiment 才真的换。
-      const tag = decision.group === 'experiment' ? decision.tag : base
+      // experiment 组按情绪换脸；off / control 保持调用方原本要用的表情。
+      // 余波不属于实验变量：实验关着时它照样生效。
+      const tag =
+        decision.group === 'experiment'
+          ? decision.tag
+          : afterglowTag !== 'neutral'
+            ? afterglowTag
+            : base
       return { ...decision, emotion: base, tag, changed: tag !== base }
     } catch (error) {
       log('表情选择失败', error)
-      return { tag: 'neutral', group: 'off', changed: false, emotion: emotion }
+      // 出错时守住调用方原本的情绪，别把人家的脸压成 neutral。
+      const fallback = typeof emotion === 'string' && emotion !== '' ? emotion : 'neutral'
+      return { tag: fallback, group: 'off', changed: false, emotion: fallback }
     }
   }
+
+  /** 「需要休息」压住主动开口的最长连续时长；过了就自动缓过来，不永久停摆。 */
+  const REST_HOLD_MAX_MS = 2 * 60 * 60 * 1000
+  let restHoldStartedAt = null
 
   /** 此刻要不要因为「需要休息」而少说一句。关着时恒为 false。 */
   function shouldHoldBackOpening() {
@@ -193,21 +233,37 @@ export function createEmotionRuntime(options = {}) {
       if (!config.needsEnabled || needs === null) return false
       const snapshot = needs.snapshot()
       // 阈值留高：只有确实很累时才压低主动开口，平时不改变原有节奏。
-      return snapshot.dominant === 'rest' && snapshot.levels.rest >= 0.9
+      const holding = snapshot.dominant === 'rest' && snapshot.levels.rest >= 0.9
+      if (!holding) {
+        restHoldStartedAt = null
+        return false
+      }
+      const at = now()
+      if (restHoldStartedAt === null) {
+        restHoldStartedAt = at
+        return true
+      }
+      if (at - restHoldStartedAt <= REST_HOLD_MAX_MS) return true
+      // 压得太久＝「休息」这个状态本身卡住了（没有满足出口的旧数据）：
+      // 自动缓过来一半，把开口还给时间表，不再永远闭嘴。
+      restHoldStartedAt = null
+      needs.satisfy('rest', 0.5)
+      log('休息需求连续压制开口超过两小时，自动缓解一半')
+      return false
     } catch (error) {
       log('需求状态判断失败', error)
       return false
     }
   }
 
-  /** 只读快照，给诊断面板与测试用。 */
+  /** 只读快照，给诊断面板与测试用。关着的块给 null，不让诊断误判成开启。 */
   function snapshot() {
     try {
       const config = sync()
       return {
-        afterglow: afterglow === null ? null : afterglow.snapshot(),
+        afterglow: config.afterglow.enabled && afterglow !== null ? afterglow.snapshot() : null,
         expression: expression === null ? null : { group: expression.currentGroup, stats: expression.stats() },
-        needs: needs === null ? null : needs.snapshot(),
+        needs: config.needsEnabled && needs !== null ? needs.snapshot() : null,
         enabled: config
       }
     } catch (error) {
@@ -219,6 +275,7 @@ export function createEmotionRuntime(options = {}) {
   return {
     noteUserTurn,
     noteAssistantReply,
+    noteRest,
     decideExpression,
     shouldHoldBackOpening,
     snapshot

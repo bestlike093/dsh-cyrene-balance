@@ -76,16 +76,22 @@
           <span class="a-hint" data-role="hint" data-i18n="ability.reflectHint">整理今天的三条印象</span>
         </button>
 
-        <button type="button" class="a-card" disabled data-action="calibrate">
-          <span class="a-icon" aria-hidden="true">◎</span>
-          <span class="a-name" data-i18n="ability.calibrate">校准</span>
-          <span class="a-hint" data-i18n="ability.calibrateHint">尚未接入（E6）</span>
-        </button>
-
         <button type="button" class="a-card" data-action="status">
           <span class="a-icon" aria-hidden="true">◔</span>
           <span class="a-name" data-i18n="ability.status">运行状态</span>
           <span class="a-hint" data-role="hint" data-i18n="ability.statusHint">打开启动前体检</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="browse">
+          <span class="a-icon" aria-hidden="true">▶</span>
+          <span class="a-name" data-i18n="ability.browse">B 站与文章</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.browseHint">搜索视频 / 读正文</span>
+        </button>
+
+        <button type="button" class="a-card" data-action="mail">
+          <span class="a-icon" aria-hidden="true">✉</span>
+          <span class="a-name" data-i18n="ability.mail">邮件</span>
+          <span class="a-hint" data-role="hint" data-i18n="ability.mailHint">真发信到收件人</span>
         </button>
       </section>
 
@@ -111,6 +117,53 @@
         </div>
         <div class="a-asset-groups" id="assets-groups">
           <p class="a-note" data-i18n="ability.assetsEmptyFull">还没读取。</p>
+        </div>
+      </section>
+
+      <section class="a-panel" id="browse-panel" hidden>
+        <div class="a-panel-head">
+          <h2 data-i18n="ability.browse">B 站与文章</h2>
+          <span class="a-note">写操作默认关闭，可在设置里逐项开启</span>
+        </div>
+        <div class="a-field-row">
+          <input type="text" id="browse-query" class="a-input" placeholder="关键词 / BV 号 / 文章网址" />
+          <button type="button" id="browse-search" class="a-ghost">搜索</button>
+          <button type="button" id="browse-article" class="a-ghost">读文章</button>
+        </div>
+        <div class="a-browse-settings">
+          <div class="a-subhead">写操作开关（默认全关，逐项开启）</div>
+          <div class="a-toggle-row" id="browse-write-toggles"></div>
+          <div class="a-field-row">
+            <span class="a-note">单次投币上限（1-2）</span>
+            <input type="number" id="browse-max-coins" class="a-input" min="1" max="2" value="2" />
+          </div>
+          <button type="button" id="browse-save-settings" class="a-ghost">保存写操作设置</button>
+        </div>
+        <div class="a-browse-results" id="browse-results"></div>
+      </section>
+
+      <section class="a-panel" id="mail-panel" hidden>
+        <div class="a-panel-head">
+          <h2 data-i18n="ability.mail">邮件</h2>
+          <span class="a-note">走本机 SMTP 真发信，正文用 UTF-8 文件</span>
+        </div>
+        <div class="a-mail-form">
+          <input type="text" id="mail-to" class="a-input" placeholder="收件人邮箱（默认收件人）" />
+          <input type="text" id="mail-subject" class="a-input" placeholder="主题" />
+          <textarea id="mail-body" class="a-input" rows="5" placeholder="正文"></textarea>
+          <button type="button" id="mail-send" class="a-ghost">发送</button>
+        </div>
+        <div class="a-mail-settings">
+          <div class="a-subhead">SMTP 配置（发件邮箱在这里自定义，独立于 Cyrene 本体）</div>
+          <div class="a-field-row">
+            <input type="text" id="smtp-host" class="a-input" placeholder="SMTP 服务器，如 smtp.163.com" />
+            <input type="number" id="smtp-port" class="a-input" placeholder="端口 465" />
+          </div>
+          <div class="a-field-row">
+            <input type="text" id="smtp-user" class="a-input" placeholder="发件邮箱 / 账号" />
+            <input type="password" id="smtp-pass" class="a-input" placeholder="授权码 / 密码" />
+          </div>
+          <button type="button" id="mail-save-settings" class="a-ghost">保存 SMTP 与默认收件人</button>
         </div>
       </section>
 

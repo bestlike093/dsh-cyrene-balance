@@ -177,6 +177,8 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
   let saveTimer = null
   /** 读到旧版本时置为 true，第一次落盘前留一份迁移前快照。 */
   let needsBackup = false
+  /** 读取失败且损坏文件无法隔离时置真：禁止写盘，绝不覆盖证据。 */
+  let writesBlocked = false
 
   function ensure(scope) {
     const key = cleanScope(scope)
@@ -210,7 +212,19 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
           }
         }
       } catch (error) {
-        if (error?.code !== 'ENOENT') log('内心状态读取失败，从空白开始', error)
+        if (error?.code === 'ENOENT') {
+          // 第一次运行：没有文件是正常状态。
+        } else {
+          log('内心状态读取失败，从空白开始', error)
+          // 读坏的文件先隔离改名：既保留证据，也避免后续写入用空状态覆盖它。
+          try {
+            await fs.rename(file, `${file}.corrupt-${now()}`)
+            log('损坏的内心状态文件已隔离，下次写入另起新文件')
+          } catch (moveError) {
+            writesBlocked = true
+            log('损坏文件无法改名，已禁止写入以避免覆盖证据', moveError)
+          }
+        }
       } finally {
         loaded = true
         loading = null
@@ -221,7 +235,7 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
   }
 
   function scheduleSave() {
-    if (file === null || saveTimer !== null) return
+    if (file === null || writesBlocked || saveTimer !== null) return
     saveTimer = setTimeout(() => {
       saveTimer = null
       void persist()
@@ -230,7 +244,7 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
   }
 
   async function persist() {
-    if (file === null) return
+    if (file === null || writesBlocked) return
     try {
       await fs.mkdir(file.replace(/[\\/][^\\/]+$/, ''), { recursive: true })
       const plain = {}
@@ -245,11 +259,14 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
           if (error?.code !== 'ENOENT') log('内心状态迁移备份失败，继续写入', error)
         }
       }
+      // 临时文件 + rename：写一半崩溃只会留下半截 .tmp，不会毁掉正本。
+      const temp = `${file}.tmp`
       await fs.writeFile(
-        file,
+        temp,
         JSON.stringify({ schemaVersion: SCHEMA_VERSION, version: 2, scopes: plain }),
         'utf8'
       )
+      await fs.rename(temp, file)
       needsBackup = false
     } catch (error) {
       log('内心状态写入失败', error)
@@ -288,21 +305,30 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
   /** 评估完成：模型给的三段话直接落下来；数值只做范围保护。锁住时只跳过 favor。 */
   function applyEvaluation({ favor, impression, relation, read, adjust } = {}, scope = DEFAULT_SCOPE) {
     const state = ensure(scope)
-    if (!state.locked && favor !== undefined && favor !== null) state.favor = clampFavor(favor)
+    let applied = false
+    if (!state.locked && favor !== undefined && favor !== null) {
+      state.favor = clampFavor(favor)
+      applied = true
+    }
     if (typeof impression === 'string' && impression.trim() !== '') {
       state.impression = cleanLine(impression, 120)
+      applied = true
     }
     if (typeof relation === 'string' && relation.trim() !== '') {
       state.relation = cleanLine(relation, 120)
+      applied = true
     }
     if (typeof read === 'string' && read.trim() !== '') {
       state.read = cleanLine(read, 60)
+      applied = true
     }
     if (typeof adjust === 'string' && adjust.trim() !== '') {
       state.adjust = cleanLine(adjust, 80)
+      applied = true
     }
     state.updatedAt = now()
-    state.pending = []
+    // 什么都没落到：这一批对话留到下一轮再评估，不白白清空。
+    if (applied) state.pending = []
     scheduleSave()
     return snapshot(scope)
   }
@@ -328,8 +354,13 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
    */
   function setFavor(value, { scope = DEFAULT_SCOPE, note = '' } = {}) {
     const state = ensure(scope)
-    // null / undefined / 空串 / 布尔值不能当成 0，否则一次误传就把好感清零。
-    if (value === null || value === undefined || value === '' || typeof value === 'boolean') {
+    // null / undefined / 空串 / 纯空白 / 布尔值不能当成 0，否则一次误传就把好感清零。
+    if (
+      value === null ||
+      value === undefined ||
+      typeof value === 'boolean' ||
+      (typeof value === 'string' && value.trim() === '')
+    ) {
       return snapshot(scope)
     }
     const number = Number(value)
@@ -376,19 +407,23 @@ export function createAffinity({ file = null, now = Date.now, log = () => {} } =
       return ''
     }
     const level = levelOf(state.favor)
+    // 动态的两行（对方刚才什么态度、上次提醒自己）放在最前面：
+    // 200 字预算从头保留，先保住的必须是「下一句怎么说话」的依据，
+    // 而不是永远不变的档位文案。
     const lines = [
-      '你私下里对对方的感觉（只影响语气，不要向对方报数值，也不要复述这段话）：',
+      '你私下里对对方的感觉（只影响语气，不要向对方报数值，也不要复述这段话）：'
+    ]
+    if (state.read !== '') lines.push(`- 对方刚才的态度：${state.read}`)
+    if (state.adjust !== '') lines.push(`- 上次提醒自己：${state.adjust}`)
+    if (state.impression !== '') lines.push(`- 印象：${state.impression}`)
+    if (state.relation !== '') lines.push(`- 关系：${state.relation}`)
+    lines.push(
       `- 好感：${level.name}`,
       `- 称呼：${level.address}`,
       `- 主动程度：${level.initiative}`,
       `- 边界：${level.boundary}`,
       `- 语气节奏：${level.pace}`
-    ]
-    if (state.impression !== '') lines.push(`- 印象：${state.impression}`)
-    if (state.relation !== '') lines.push(`- 关系：${state.relation}`)
-    // 这两行是「回头看一眼」的结果：对方刚才什么态度，自己下次该怎么说。
-    if (state.read !== '') lines.push(`- 对方刚才的态度：${state.read}`)
-    if (state.adjust !== '') lines.push(`- 上次提醒自己：${state.adjust}`)
+    )
     return lines.join('\n')
   }
 

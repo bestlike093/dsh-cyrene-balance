@@ -27,7 +27,7 @@ import { INTIMACY_EDITION, IS_PUBLIC_EDITION } from './edition.mjs'
 
 /**
  * 版本分区由 edition.mjs 统一判定：
- *   qiqi   —— 旅人版，本机测试用，尺度对齐上游 ccb
+ *   qiqi   —— 完整版，本机测试用，尺度对齐上游 ccb
  *   public —— 公开版，整条亲密层不生效，只留合规的陪伴
  *
  * 打包时由 scripts/package.mjs --edition=xxx 写入 edition.txt；
@@ -159,7 +159,7 @@ export function capByAffection(favor) {
  * 红线分两层。
  *
  * 硬底线两版都拦：未成年、非自愿。
- * 身体与衣物只在公开版拦——旅人版按上游 ccb 的纪律，只给「此刻到哪一步」，
+ * 身体与衣物只在公开版拦——完整版按上游 ccb 的纪律，只给「此刻到哪一步」，
  * 具体怎么写由人设和当下的气氛决定。
  */
 const HARD_REDLINE = Object.freeze([
@@ -172,12 +172,10 @@ const PUBLIC_ONLY_REDLINE = Object.freeze([
   /(脱|褪下|解开).{0,6}(衣服|衣扣|衬衫|裤子|裙子|内衣|裙摆)/
 ])
 
-/** 按版本取红线：公开版 = 硬底线 + 身体与衣物；旅人版 = 只有硬底线。 */
+/** 按版本取红线：公开版 = 硬底线 + 身体与衣物；完整版 = 只有硬底线。 */
 export function redlineFor(edition = INTIMACY_EDITION) {
   return edition === 'public' ? Object.freeze([...HARD_REDLINE, ...PUBLIC_ONLY_REDLINE]) : HARD_REDLINE
 }
-
-const REDLINE_PATTERNS = redlineFor()
 
 /** 退回时用的普通台词：短、干净，接得上前一句，也接得上下一句。 */
 export const SAFE_LINES = Object.freeze([
@@ -225,7 +223,7 @@ const INVITE_PATTERN = /(抱抱|抱一下|抱抱你|抱我|靠一下|靠过来|�
 const TIRED_PATTERN = /(累|困|难受|不开心|烦|撑不住|没力气)/
 
 /**
- * 旅人版：只给「此刻到哪一步」，不规定怎么写。
+ * 完整版：只给「此刻到哪一步」，不规定怎么写。
  *
  * 上游 ccb 的措辞纪律是「感受不是描述」：模块负责状态，写法交给人设和模型。
  * 每档只说此刻的位置与气氛，不列动作清单，也不列禁止清单。
@@ -401,30 +399,98 @@ export function createIntimacyGate(options = {}) {
   const log = typeof options.log === 'function' ? options.log : () => {}
   const fs = options.fs ?? null
 
+  /*
+   * 账本按会话分开记：桌面一把钥匙，每个 QQ 私聊各一把。
+   * 老文件是平铺的一份 state，第一次读的时候整份迁到 desktop 名下。
+   * state 始终指向「当前正在用的那一份」，其余函数不用关心切换。
+   */
+  let store = { version: 2, scopes: {} }
+  let current = 'desktop'
   let state = blankState()
-  let exitedAt = 0
+  let exitedAt = new Map()
   let saveTimer = null
+  /** 上次读取失败且坏文件无法隔离时置真：禁止写盘，绝不覆盖证据。 */
+  let writesBlocked = false
+
+  /** 只认桌面与 QQ 私聊；群聊不给账本，避免建出一堆没用的条目。 */
+  function scopeKeyOf(raw) {
+    if (raw === 'desktop') return 'desktop'
+    if (typeof raw === 'string' && raw.startsWith('qq:private:')) return raw
+    return 'desktop'
+  }
+
+  function syncScope() {
+    store.scopes[current] = state
+  }
+
+  function useScope(raw) {
+    const key = scopeKeyOf(raw)
+    if (key === current) return current
+    syncScope()
+    current = key
+    if (store.scopes[key] === undefined) store.scopes[key] = blankState()
+    state = store.scopes[key]
+    return current
+  }
 
   function load() {
     if (fs === null || file === '') return state
     try {
       const text = fs.readFileSync(file, 'utf8')
-      state = readState(JSON.parse(text))
-    } catch {
-      // 第一次运行没有文件，或文件坏了：从零开始，不阻塞对话。
-      state = blankState()
+      const parsed = JSON.parse(text)
+      if (parsed !== null && typeof parsed === 'object' && parsed.scopes !== null && typeof parsed.scopes === 'object') {
+        store = { version: 2, scopes: {} }
+        for (const [key, value] of Object.entries(parsed.scopes)) {
+          store.scopes[scopeKeyOf(key)] = readState(value)
+        }
+      } else {
+        // 旧格式：整份迁到 desktop，不丢历史。
+        store = { version: 2, scopes: { desktop: readState(parsed) } }
+      }
+      current = 'desktop'
+      if (store.scopes.desktop === undefined) store.scopes.desktop = blankState()
+      state = store.scopes.desktop
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        // 第一次运行：没有文件是正常状态。
+        store = { version: 2, scopes: {} }
+        current = 'desktop'
+        state = blankState()
+      } else {
+        // 文件坏了：先隔离改名保留证据，本次运行禁止写盘，
+        // 绝不把「读失败」当「空账本」再覆盖回去。
+        log('贴近记账读取失败，从空白开始', error)
+        store = { version: 2, scopes: {} }
+        current = 'desktop'
+        state = blankState()
+        try {
+          fs.renameSync(file, `${file}.corrupt-${now()}`)
+          log('损坏的贴近记账文件已隔离，下次写入另起新文件')
+        } catch (moveError) {
+          writesBlocked = true
+          log('损坏文件无法改名，已禁止写入以避免覆盖证据', moveError)
+        }
+      }
     }
     return state
   }
 
   function flush() {
     if (fs === null || file === '') return
+    if (writesBlocked) {
+      log('贴近记账写盘被禁止：上次读取失败且损坏文件无法隔离')
+      return
+    }
     if (saveTimer !== null) {
       clearTimeout(saveTimer)
       saveTimer = null
     }
     try {
-      fs.writeFileSync(file, JSON.stringify(state), 'utf8')
+      syncScope()
+      // 临时文件 + rename：写一半崩溃只会留下半截 .tmp，不会毁掉正本。
+      const temp = `${file}.tmp`
+      fs.writeFileSync(temp, JSON.stringify(store), 'utf8')
+      fs.renameSync(temp, file)
     } catch (error) {
       log('贴近记账写入失败', error)
     }
@@ -480,6 +546,16 @@ export function createIntimacyGate(options = {}) {
     return state
   }
 
+  /**
+   * 哪些会话允许靠近：桌面永远算；QQ 只有主人逐个打开的私聊才算。
+   * 群聊不在此列——那里的人看不到她的表情与停顿。
+   */
+  function peerAllowed(scope, settings) {
+    if (typeof scope !== 'string' || !scope.startsWith('qq:private:')) return false
+    const peers = settings?.companion?.intimacy?.peers
+    return peers !== null && typeof peers === 'object' && peers[scope] === true
+  }
+
   function limitsOf(settings) {
     const source = settings?.companion?.intimacy ?? {}
     const perDay = Number.isFinite(Number(source.perDay))
@@ -533,21 +609,21 @@ export function createIntimacyGate(options = {}) {
       label: ''
     })
 
-    // 上一次说话的时间要在写回之前取，否则「久别」永远算成 0。
-    const previousSeenAt = Number.isFinite(Number(state.seenAt)) ? Number(state.seenAt) : 0
-    // 见过这一轮就记下；落盘由之后任何一次 save 顺带完成。
-    state = { ...state, seenAt: at }
-
     // 公开版整条不生效：即使设置被手动打开，也不放行。
     if (IS_PUBLIC_EDITION) return closed('edition')
 
     if (settings?.companion?.intimacy?.enabled !== true) return closed('disabled')
 
     const scope = typeof input.scope === 'string' ? input.scope : 'desktop'
-    if (scope !== 'desktop') {
-      // 群聊与 QQ 远端一律不触发：那里的人看不到她的表情与停顿。
-      return closed('scenario')
-    }
+    // 桌面上本来就在一起；QQ 只有主人逐个打开的私聊才算，群聊永远不触发。
+    if (scope !== 'desktop' && !peerAllowed(scope, settings)) return closed('scenario')
+
+    // 校验通过再切账本：被拒的通道不留下任何记录。
+    useScope(scope)
+    // 上一次说话的时间要在写回之前取，否则「久别」永远算成 0。
+    const previousSeenAt = Number.isFinite(Number(state.seenAt)) ? Number(state.seenAt) : 0
+    // seenAt 只在「真的发生了互动」的路径上写：被安全闸、无由头、欲望、
+    // 精力、次数、冷却挡住的那一轮不算数，不重写「久别」的基准。
 
     // 硬闸排在最前面：命中就整条不生效，不降档、不软化。
     const blocked = safetyBlock(input.personaText)
@@ -573,6 +649,9 @@ export function createIntimacyGate(options = {}) {
     // 已经在一场里：继续，不看次数与冷却。
     const stage = liveStage(at, limits)
     if (stage !== 'none') {
+      // 场景继续：这一轮真的发生了互动，记下「见过」并落盘。
+      state = { ...state, seenAt: at }
+      scheduleSave()
       const toneOf = { near: 'soft', lean: 'close', edge: 'edge', peak: 'peak' }
       const level = narrowLevel(levelOf(state.desire - state.desireBase), tierCap)
       const energy = Number(input.energy)
@@ -600,6 +679,9 @@ export function createIntimacyGate(options = {}) {
     // 刚收场：留一段余温，不再起新的动作。
     const afterMs = limits.aftercareMinutes * 60 * 1000
     if (state.afterAt > 0 && at - state.afterAt < afterMs) {
+      // 余韵里的互动同样算「见过」。
+      state = { ...state, seenAt: at }
+      scheduleSave()
       return {
         open: true,
         reason: 'afterglow',
@@ -632,12 +714,12 @@ export function createIntimacyGate(options = {}) {
     if (cue === '') return closed('no-cue')
 
     // 先算这次抬升但不写回：被门槛挡住的那一轮不继续攒欲望。
-    // 外部给了数值就以外部为准。
+    // 外部给了数值就以外部为准——返回的档位与落盘的数值必须同一套。
     const plan = planDesire(at, DESIRE_STEP)
-    const desire = Number.isFinite(Number(input.desire)) ? clampDesire(input.desire) : plan.desire
-    const base = Number.isFinite(Number(input.desireBase))
-      ? clampDesire(input.desireBase)
-      : plan.desireBase
+    const hasExternalDesire = Number.isFinite(Number(input.desire))
+    const hasExternalBase = Number.isFinite(Number(input.desireBase))
+    const desire = hasExternalDesire ? clampDesire(input.desire) : plan.desire
+    const base = hasExternalBase ? clampDesire(input.desireBase) : plan.desireBase
     if (desire < DESIRE_ENTER) return closed('desire-low', cue)
     // 已经顶到满值：不再要求涨幅，免得「越想要越开不了」。
     if (desire < DESIRE_MAX - 1 && desire - base < DESIRE_RISE) return closed('desire-flat', cue)
@@ -662,7 +744,11 @@ export function createIntimacyGate(options = {}) {
         energy: Number.isFinite(energy) ? energy : 60,
         tier
       }) >= INITIATIVE_MIN
-    state = { ...state, ...plan, stage: 'near', turns: 0, stageAt: at }
+    // 落盘写与返回档位同一套数值：外部给了就以外部为准，避免下一轮按另一套继续。
+    const writePlan = hasExternalDesire || hasExternalBase
+      ? { ...plan, desire, desireBase: base }
+      : plan
+    state = { ...state, ...writePlan, stage: 'near', turns: 0, stageAt: at, seenAt: at }
     scheduleSave()
     return {
       open: true,
@@ -680,7 +766,8 @@ export function createIntimacyGate(options = {}) {
    * 这一轮真的说出口之后推进一格。
    * 第一次推进时计一次数；到顶就收场，并把窗口交给余韵。
    */
-  function noteTurn(at = now()) {
+  function noteTurn(at = now(), scope = 'desktop') {
+    useScope(scope)
     if (state.stage === 'none') return { ...state, ended: false }
 
     // 场景里每说一句，亲近欲再抬一点；回落由 stirDesire 自己按小时算。
@@ -714,11 +801,12 @@ export function createIntimacyGate(options = {}) {
   }
 
   /** 兼容旧调用：表示「这一轮真的说出口了」。 */
-  function noteOpen(at = now()) {
+  function noteOpen(at = now(), scope = 'desktop') {
+    useScope(scope)
     if (state.stage === 'none') {
       state = { ...state, stage: 'near', turns: 0, stageAt: at }
     }
-    return noteTurn(at)
+    return noteTurn(at, scope)
   }
 
   /**
@@ -727,8 +815,9 @@ export function createIntimacyGate(options = {}) {
    * 之后安静 30 分钟（上游 ccb 是同一个数），这段时间不主动贴近；
    * 但对方主动来，仍然正常回话——静默只约束「她先动」。
    */
-  function noteExit(at = now()) {
-    exitedAt = at
+  function noteExit(at = now(), scope = 'desktop') {
+    const key = useScope(scope)
+    exitedAt.set(key, at)
     state = {
       ...state,
       stage: 'none',
@@ -740,22 +829,29 @@ export function createIntimacyGate(options = {}) {
     scheduleSave()
   }
 
-  function hasExited(at = now()) {
-    return exitedAt > 0 && at - exitedAt < REFUSE_QUIET_MS
+  function hasExited(at = now(), scope = 'desktop') {
+    const last = exitedAt.get(scopeKeyOf(scope)) ?? 0
+    if (last > 0 && at - last < REFUSE_QUIET_MS) return true
+    // 内存 Map 重启即空，但静默期跟着账本落盘：重启后也要给出同一答案。
+    const quietUntil = Number(state.quietUntil)
+    return Number.isFinite(quietUntil) && quietUntil > 0 && at < quietUntil
   }
 
   /**
    * 发送前的红线过滤。
    * 命中就整句换成安全台词：不重试，也不试图删掉几个词再发。
+   * edition 可注入（测试/运行期切换用）；缺省用打包时的版本。
    */
-  function filterReply(text, at = now()) {
+  function filterReply(text, at = now(), edition = INTIMACY_EDITION) {
     const source = String(text ?? '')
     if (source.trim() === '') return { ok: true, text: source, reason: 'empty' }
-    const hit = REDLINE_PATTERNS.find((pattern) => pattern.test(source))
+    const patterns = redlineFor(edition)
+    const hit = patterns.find((pattern) => pattern.test(source))
     if (hit === undefined) return { ok: true, text: source, reason: 'clean' }
-    const index = Math.abs(Math.trunc(at / 60_000)) % SAFE_LINES.length
+    const stamp = Number(at)
+    const index = Number.isFinite(stamp) ? Math.abs(Math.trunc(stamp / 60_000)) % SAFE_LINES.length : 0
     log('贴近输出命中红线，退回普通台词')
-    return { ok: false, text: SAFE_LINES[index], reason: 'redline' }
+    return { ok: false, text: SAFE_LINES[index] ?? SAFE_LINES[0], reason: 'redline' }
   }
 
   /**
@@ -785,10 +881,18 @@ export function createIntimacyGate(options = {}) {
     noteExit,
     hasExited,
     filterReply,
-    snapshot: () => ({ ...state }),
-    reset: () => {
+    snapshot: (scope = 'desktop') => {
+      // 群聊与未知通道没有账本：不把桌面的账错给出去。
+      const known = scope === 'desktop' || (typeof scope === 'string' && scope.startsWith('qq:private:'))
+      if (!known) return { ...blankState() }
+      useScope(scope)
+      return { ...state }
+    },
+    reset: (scope = 'desktop') => {
+      const key = useScope(scope)
       state = blankState()
-      exitedAt = 0
+      syncScope()
+      exitedAt.delete(key)
       scheduleSave()
     }
   }
@@ -797,7 +901,11 @@ export function createIntimacyGate(options = {}) {
 /** 设置页与日志用的一句话状态，不暴露内容。 */
 export function describeIntimacy(settings, state = {}) {
   if (settings?.companion?.intimacy?.enabled !== true) return '贴近时刻：关闭'
-  const perDay = Number(settings.companion.intimacy.perDay) || INTIMACY_DEFAULTS.perDay
+  // 显示的上限与实际执行的上限同一口径：1~8 夹取，不填按默认。
+  const perDayRaw = Number(settings.companion.intimacy.perDay)
+  const perDay = Number.isFinite(perDayRaw) && perDayRaw > 0
+    ? Math.min(8, Math.max(1, Math.trunc(perDayRaw)))
+    : INTIMACY_DEFAULTS.perDay
   const count = Number(state.count) || 0
   const stage = STAGE_LABELS[state.stage] ?? ''
   const suffix = stage === '' ? '' : ` · ${stage}`

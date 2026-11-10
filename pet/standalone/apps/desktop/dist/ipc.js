@@ -3,6 +3,11 @@ import { ErrorCode, PetError } from '@pet/shared';
 export const IPC_CHANNELS = [
     'pet:ask',
     'pet:approve',
+    'pet:speech:list',
+    'pet:speech:resolve',
+    'pet:speech:learning',
+    'pet:plugin:live',
+    'pet:plugin:command',
     'pet:reportTask',
     'pet:settings:get',
     'pet:settings:save',
@@ -18,6 +23,8 @@ export const IPC_CHANNELS = [
     // 一键绑定：把最近一条入站消息的发送者写进主人名单，会落盘并重建通道。
     'pet:qq:bind-owner',
     'pet:window:setClickThrough',
+    // 像素级穿透：渲染层命中判断后切换可点/穿透，只接受 true/false。
+    'pet:window:setPixelHit',
     'pet:window:setAlwaysOnTop',
     'pet:window:move',
     'pet:window:applySize',
@@ -35,7 +42,13 @@ export const IPC_CHANNELS = [
     'pet:balance:query',
     // 余额告警确认：气泡上的「知道了」只写 ack，不改账本。
     'pet:balance:ack',
+    // 人格问卷：渲染进程取题库、交答案算分、落结果；量表只在 companion 里维护一份。
+    'pet:assessment:schema',
+    'pet:assessment:score',
+    'pet:assessment:save',
     'pet:menu:context',
+    // 记忆观察台入口在设置里，窗口由主进程开。
+    'pet:memory:open',
     'pet:vault:diagnose',
     'pet:vault:export',
     'pet:vault:import',
@@ -54,6 +67,14 @@ export const IPC_CHANNELS = [
     'pet:secrets:clear',
     'pet:voice:speak',
     'pet:voice:status',
+    // 语音输入：状态 / 配置 / 保存 / 麦克风开关 / 转写 / 本机服务。
+    // 这几个通道在上线时漏登记，窗口一启动就抛 PERMISSION_DENIED，整窗起不来。
+    'pet:asr:status',
+    'pet:asr:config',
+    'pet:asr:save',
+    'pet:asr:mic',
+    'pet:asr:transcribe',
+    'pet:asr:local',
     'pet:chat:send',
     'pet:chat:history',
     'pet:chat:status',
@@ -70,6 +91,8 @@ export const IPC_CHANNELS = [
     // 她记住的事整份备份：JSONL 一行一条，导出后可原样导入。
     'pet:memory:facts:export',
     'pet:memory:facts:import',
+    // 学习闭环落库口：把 kind=knowledge 写进结构化记忆。
+    'pet:memory:addFacts',
     'pet:memory:list',
     'pet:memory:delete',
     // 钉子：钉住的记忆不降温、不自动归档。
@@ -119,6 +142,20 @@ export const IPC_CHANNELS = [
     'pet:packs:import',
     'pet:packs:remove',
     'pet:packs:setEnabled',
+    // 聊天页背景：只弹系统选择框挑一张本机图片，复制进 userData/backgrounds。
+    'pet:background:list',
+    'pet:background:pick',
+    'pet:background:clear',
+    // 背景库独立页：按 id 选用 / 删除，以及从设置窗打开这一页。
+    'pet:background:apply',
+    'pet:background:remove',
+    'pet:background:open',
+    // 背景五槽：读各槽当前用的图，以及单独设定某个槽（id 空 = 该槽不用背景）。
+    'pet:background:slots',
+    'pet:background:slot:set',
+    // 会话页：聊天历史与 QQ 会话放在同一个窗口里看。
+    'pet:sessions:open',
+    'pet:qq:conversations',
     // 表情包：QQ 偷来的图先进待审核队列，入库 / 丢弃只能由用户点。
     'pet:sticker:inbox',
     'pet:sticker:library',
@@ -142,6 +179,9 @@ export const IPC_CHANNELS = [
     'pet:insight:lock-favor',
     'pet:insight:reset-scope',
     'pet:insight:delete-memory',
+    // 观察台的两个会话级开关：贴近时刻与摩擦强度，都只写单个会话。
+    'pet:insight:set-intimacy',
+    'pet:insight:set-friction',
     // 参考音频：只弹系统选择框挑本机音频，回绝对路径；不读文件内容。
     'pet:voice:pickRefAudio',
     // 语音唤醒：运行时按需下载（默认关闭）。只装/卸/开关/看状态，不搬运音频。
@@ -159,7 +199,18 @@ export const IPC_CHANNELS = [
     // 同步口令：只用于给同步包里的敏感字段加密，明文不落盘、不进包。
     'pet:sync:setPassphrase',
     'pet:sync:clearPassphrase',
-    'pet:sync:passphraseStatus'
+    'pet:sync:passphraseStatus',
+    // B 站与邮件：能力中心的两个真入口。写操作默认全关，投币上限 2 枚。
+    'pet:bili:search',
+    'pet:bili:videoInfo',
+    'pet:bili:open',
+    'pet:bili:write',
+    'pet:bili:article',
+    // 字幕取稿与登录态：学习闭环读字幕全文，登录态只读。
+    'pet:bili:subtitleList',
+    'pet:bili:transcript',
+    'pet:bili:loginStatus',
+    'pet:mail:send'
 ];
 const ALLOWED = new Set(IPC_CHANNELS);
 export function isAllowedChannel(channel) {

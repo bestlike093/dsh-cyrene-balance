@@ -168,11 +168,17 @@ export function createHandoffStore({ file = null, now = Date.now, log = () => {}
       createdAt: now(),
       ttlMs: Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : DEFAULT_TTL_MS
     }
-    // 同一对窗口只留最新一条：旧话不该在新场景里反复出现。
-    entries = entries.filter((item) => !(item.fromScope === from && item.toScope === to))
-    entries.push(entry)
-    if (entries.length > MAX_ITEMS) entries = entries.slice(-MAX_ITEMS)
-    scheduleSave()
+    // 竞态防护：ready() 读盘完成后会用磁盘内容整体覆盖 entries，
+    // 所以 push 必须排到 ready() 之后，否则刚写的这条会被旧数据冲掉。
+    // write 保持同步返回，入队动作等读盘结束再执行。
+    void ready().then(() => {
+      refresh()
+      // 同一对窗口只留最新一条：旧话不该在新场景里反复出现。
+      entries = entries.filter((item) => !(item.fromScope === from && item.toScope === to))
+      entries.push(entry)
+      if (entries.length > MAX_ITEMS) entries = entries.slice(-MAX_ITEMS)
+      scheduleSave()
+    })
     return { ok: true, entry }
   }
 

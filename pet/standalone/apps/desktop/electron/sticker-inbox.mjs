@@ -24,6 +24,8 @@ const AUTO_PACK_ID = 'qq-auto'
 const AUTO_MAX_BYTES = 1.6 * 1024 * 1024
 /** 自动收下的最大边长。 */
 const AUTO_MAX_SIDE = 1024
+/** approve 的串行队列（模块级）：挑空位与 rename 之间不允许并发，两个同名入库才不会撞同一个目标名。 */
+let approveChain = Promise.resolve()
 
 /** 从文件头读宽高，读不到就返回 null，不猜。 */
 function readImageSize(buffer, ext) {
@@ -134,19 +136,45 @@ export function createStickerInbox({ root, log = () => {} }) {
     await fs.mkdir(dir, { recursive: true })
   }
 
+  /** 索引读坏过就置位：下一次写盘前要先隔离旧文件，绝不用内存清单覆盖最后一份旧账。 */
+  let readsBroken = false
+  /** 索引写串行化：.tmp + rename 两步之间不允许另一次写插进来。 */
+  let indexWriteChain = Promise.resolve()
+
   async function readIndex() {
     try {
       const raw = await fs.readFile(indexPath, 'utf8')
       const parsed = JSON.parse(raw)
-      return Array.isArray(parsed?.items) ? parsed.items : []
-    } catch {
+      if (!Array.isArray(parsed?.items)) throw new Error('index.json 结构不对')
+      return parsed.items
+    } catch (error) {
+      // 文件不存在（第一次使用）不算坏；读不了或解析不了，先把坏文件改名隔离，
+      // 否则下一次 add 会用空索引覆盖，整个队列全丢。
+      if (error === null || typeof error !== 'object' || error.code !== 'ENOENT') {
+        readsBroken = true
+        const corruptPath = `${indexPath}.corrupt-${Date.now()}`
+        await fs.rename(indexPath, corruptPath).catch(() => {})
+        log('[sticker] 索引损坏，已隔离到', corruptPath, String(error?.message ?? error))
+      }
       return []
     }
   }
 
   async function writeIndex(items) {
     await ensure()
-    await fs.writeFile(indexPath, JSON.stringify({ items }, null, 2), 'utf8')
+    // 写盘前先把现存旧文件再隔离一份：上次读坏过就绝不拿（可能不完整的）内存清单覆盖旧账。
+    if (readsBroken) {
+      readsBroken = false
+      await fs.rename(indexPath, `${indexPath}.corrupt-${Date.now()}`).catch(() => {})
+    }
+    const run = async () => {
+      // 原子写：先落 .tmp 再改名，进程中途死掉也不会留下半个 JSON。
+      const tmpPath = `${indexPath}.tmp`
+      await fs.writeFile(tmpPath, JSON.stringify({ items }, null, 2), 'utf8')
+      await fs.rename(tmpPath, indexPath)
+    }
+    indexWriteChain = indexWriteChain.then(run, run)
+    await indexWriteChain
   }
 
   /** 指纹表坏了就当空的：宁可重复收一张，也别让偷图整条链路停下来。 */
@@ -264,8 +292,10 @@ export function createStickerInbox({ root, log = () => {} }) {
       if (verdict.auto) {
         const targetDir = path.join(root, AUTO_PACK_ID, 'emoji')
         await fs.mkdir(targetDir, { recursive: true })
-        const base = path.basename(safeFilename, ext)
-        const target = await uniqueTarget(targetDir, sanitizeName(base, id), ext)
+        // 原始文件名自带的扩展名可能和 Content-Type 对不上（foo.png 其实是 webp），
+        // 剥掉任意已知图片扩展名，再按 Content-Type 的 ext 重拼，别落成 foo.png.jpg。
+        const base = sanitizeName(safeFilename.replace(/\.(?:png|jpe?g|gif|webp)$/i, ''), id)
+        const target = await uniqueTarget(targetDir, base, ext)
         await fs.writeFile(target, buffer)
         const item = {
           id,
@@ -290,9 +320,8 @@ export function createStickerInbox({ root, log = () => {} }) {
     }
 
     const file = `${id}${ext}`
-    await ensure()
-    await fs.writeFile(path.join(dir, file), buffer)
-
+    // 先登记进内存、再落图、最后写索引：索引写失败时把刚落的图删掉再抛错，
+    // 不留「磁盘有图、索引没账」的孤儿文件。
     const items = await readIndex()
     const item = {
       id,
@@ -307,12 +336,25 @@ export function createStickerInbox({ root, log = () => {} }) {
       receivedAt
     }
     items.unshift(item)
-    // 超出上限时先删最旧的磁盘文件，再截断索引。
+    // 超量的旧记录先从内存里摘出来；等索引写成功后再删它们的磁盘文件，
+    // 索引写失败的话磁盘还和旧索引一致，什么都不用补偿。
+    const droppedFiles = []
     while (items.length > MAX_ITEMS) {
       const dropped = items.pop()
-      if (dropped !== undefined) await fs.rm(path.join(dir, dropped.file), { force: true })
+      if (dropped !== undefined) droppedFiles.push(dropped.file)
     }
-    await writeIndex(items)
+    await ensure()
+    await fs.writeFile(path.join(dir, file), buffer)
+    try {
+      await writeIndex(items)
+    } catch (error) {
+      // 索引没写进去就当作没收过这张图：删掉刚落的文件，把失败还给调用方。
+      await fs.rm(path.join(dir, file), { force: true }).catch(() => {})
+      throw error
+    }
+    for (const droppedFile of droppedFiles) {
+      await fs.rm(path.join(dir, droppedFile), { force: true }).catch(() => {})
+    }
     await rememberHash({
       hash,
       id,
@@ -348,7 +390,19 @@ export function createStickerInbox({ root, log = () => {} }) {
   }
 
   /** 入库：移动到 packs/<packId>/emoji/<name>.<ext>，重名自动加序号。 */
-  async function approve(id, { packId = 'qq-inbox', name = '' } = {}) {
+  async function approve(id, options = {}) {
+    // 排进模块级串行队列：approve 里的「挑空位 → rename」两步必须独占，
+    // 并发执行时两个请求会同时看中同一个空位，后 rename 的静默覆盖先 rename 的。
+    const task = approveChain.then(
+      () => approveOnce(id, options),
+      () => approveOnce(id, options)
+    )
+    approveChain = task.catch(() => {})
+    return task
+  }
+
+  /** 入库本体，由 approve 串行调用，见上面的队列说明。 */
+  async function approveOnce(id, { packId = 'qq-inbox', name = '' } = {}) {
     const items = await readIndex()
     const index = items.findIndex((item) => item.id === id)
     if (index < 0) throw new Error('待审核项不存在')

@@ -85,6 +85,8 @@ export function createSocialProfileStore(options = {}) {
   let profiles = new Map()
   let loaded = false
   let loading = null
+  /** 上次读取失败过：写入前要先备份旧文件，别把「读不了」当「空数据」覆盖。 */
+  let degraded = false
   let saveTimer = null
   let writeChain = Promise.resolve(true)
 
@@ -97,7 +99,11 @@ export function createSocialProfileStore(options = {}) {
         try {
           parsed = JSON.parse(await fs.readFile(filePath, 'utf8'))
         } catch (error) {
-          if (error?.code === 'ENOENT') return { ok: true, count: 0 }
+          if (error?.code === 'ENOENT') {
+            // 文件本来就不存在：首次启动，按空画像继续。
+            loaded = true
+            return { ok: true, count: 0 }
+          }
           throw error
         }
         const list = Array.isArray(parsed?.profiles) ? parsed.profiles : []
@@ -114,13 +120,17 @@ export function createSocialProfileStore(options = {}) {
             samples: Math.max(1, Math.floor(asNumber(item.samples, stats.sampleSize)))
           })
         }
+        loaded = true
+        degraded = false
         return { ok: true, count: profiles.size }
       } catch (error) {
+        // 读失败不置 loaded：下次 load 还会再试；置 degraded，
+        // 让 flush 先备份旧文件，避免把暂时读不了的旧画像当成空数据冲掉。
         log('群聊画像读取失败，按空画像继续', error)
+        degraded = true
         profiles = new Map()
         return { ok: false, reason: 'unreadable' }
       } finally {
-        loaded = true
         loading = null
       }
     })()
@@ -149,6 +159,14 @@ export function createSocialProfileStore(options = {}) {
           .slice(0, maxScopes)
         const temp = `${filePath}.tmp`
         await fs.mkdir(filePath.replace(/[\\/][^\\/]+$/, ''), { recursive: true })
+        // 读取失败过：先备份旧文件再覆盖，保住里面可能还在的数据。
+        if (degraded) {
+          try {
+            await fs.copyFile(filePath, `${filePath}.bak`)
+          } catch {
+            // 原文件可能不存在或仍不可读；备份失败不拦正常写入。
+          }
+        }
         await fs.writeFile(temp, JSON.stringify({ version: VERSION, profiles: list }), 'utf8')
         await fs.rename(temp, filePath)
         return true
@@ -167,6 +185,27 @@ export function createSocialProfileStore(options = {}) {
     return entry.samples * Math.exp(-days / DECAY_DAYS)
   }
 
+  /** 词表没有计数，按「哪边样本重听哪边」保留；旧样本还占大头时别让新词表把它整个冲掉。 */
+  function mergeWords(oldList, freshList, oldWeight, freshWeight) {
+    if (oldWeight >= freshWeight) return oldList.length > 0 ? oldList : freshList
+    return freshList.length > 0 ? freshList : oldList
+  }
+
+  /** 短语带计数，按同样的衰减权重合成，而不是每次都用新样本的覆盖旧的。 */
+  function mergePhrases(oldList, freshList, oldWeight, freshWeight) {
+    const total = oldWeight + freshWeight
+    const merged = new Map()
+    for (const item of oldList) merged.set(item.phrase, item.count * (oldWeight / total))
+    for (const item of freshList) {
+      merged.set(item.phrase, (merged.get(item.phrase) ?? 0) + item.count * (freshWeight / total))
+    }
+    return [...merged.entries()]
+      .map(([phrase, count]) => ({ phrase, count: Math.round(count) }))
+      .filter((item) => item.count >= 1)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6)
+  }
+
   function mergeStats(oldStats, fresh, oldWeight, freshWeight) {
     const result = sanitizeStats(fresh)
     if (oldStats === null || oldWeight <= 0.5) return result
@@ -181,6 +220,12 @@ export function createSocialProfileStore(options = {}) {
     }
     result.burst.avg =
       Math.round(((asNumber(oldStats.burst?.avg, 1) * oldWeight + asNumber(fresh.burst?.avg, 1) * freshWeight) / total) * 10) / 10
+    // MEM-198：文本字段不能每次都被 sanitizeStats(fresh) 直接覆盖，
+    // 否则旧画像的语感词和高频短语一个都不剩，7 天衰减只对数值字段生效。
+    result.particles = mergeWords(oldStats.particles, fresh.particles, oldWeight, freshWeight)
+    result.openers = mergeWords(oldStats.openers, fresh.openers, oldWeight, freshWeight)
+    result.closers = mergeWords(oldStats.closers, fresh.closers, oldWeight, freshWeight)
+    result.frequentPhrases = mergePhrases(oldStats.frequentPhrases, fresh.frequentPhrases, oldWeight, freshWeight)
     return result
   }
 
@@ -195,10 +240,13 @@ export function createSocialProfileStore(options = {}) {
     const at = now()
     const previous = profiles.get(key)
     const oldWeight = weightOf(previous, at)
+    // MEM-188：samples 记累计样本数，而不是最近一批的窗口大小；
+    // 这样 7 天衰减作用的是整个旧画像，而不是「上一次的 200 条」。
+    const samples = (previous === undefined ? 0 : previous.samples) + fresh.sampleSize
     const merged = mergeStats(previous?.stats ?? null, fresh, oldWeight, fresh.sampleSize)
-    profiles.set(key, { stats: merged, updatedAt: at, samples: fresh.sampleSize })
+    profiles.set(key, { stats: merged, updatedAt: at, samples })
     scheduleSave()
-    return { ...merged, updatedAt: at, samples: fresh.sampleSize }
+    return { ...merged, updatedAt: at, samples }
   }
 
   function get(scope) {

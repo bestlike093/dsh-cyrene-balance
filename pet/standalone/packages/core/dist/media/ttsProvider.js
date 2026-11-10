@@ -167,7 +167,8 @@ export function createLocalTtsProvider(options) {
                 format: input.format ?? options.format,
                 protocol: options.protocol ?? 'gpt-sovits',
                 refAudioPath: options.refAudioPath,
-                promptLang: options.promptLang
+                promptLang: options.promptLang,
+                promptText: options.promptText ?? ''
             });
             return requestAudio(settings, input.text, maxTextLength, fetchImpl, signal);
         }

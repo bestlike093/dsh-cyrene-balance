@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>弹幕</title>
+    <link rel="stylesheet" href="./danmaku.css" />
+  </head>
+  <body>
+    <!-- 整块区域都不接收鼠标；内容由主进程一条条推过来。 -->
+    <div id="stage" aria-hidden="true"></div>
+    <script src="./danmaku.js"></script>
+  </body>
+</html>

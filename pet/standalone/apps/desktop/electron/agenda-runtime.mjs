@@ -8,6 +8,7 @@
  * - 只影响「她现在在做什么」的说法，不阻止回复，也不改节目单结构。
  */
 import fs from 'node:fs/promises'
+import path from 'node:path'
 
 const SCHEMA_VERSION = 2
 const SAVE_DEBOUNCE_MS = 1_000
@@ -69,6 +70,9 @@ export function createAgendaRuntime({ file = null, now = Date.now, log = () => {
   let loading = null
   let saveTimer = null
   let needsBackup = false
+  // 最近一次读盘失败（非 ENOENT）的原因；坏文件隔离成功前禁止写盘，
+  // 否则会用内存里的空状态把原文件整个覆盖掉。
+  let loadError = null
 
   async function ready() {
     if (loaded) return snapshot()
@@ -83,10 +87,21 @@ export function createAgendaRuntime({ file = null, now = Date.now, log = () => {
             state = readState(parsed.state ?? parsed)
           }
         }
-      } catch (error) {
-        if (error?.code !== 'ENOENT') log('日程状态读取失败，从空白开始', error)
-      } finally {
+        loadError = null
         loaded = true
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          // 文件本来就不存在，属于首次启动，直接按空白开始。
+          loadError = null
+          loaded = true
+        } else {
+          // 读失败保持未加载，让下一次 ready() 有机会重试；
+          // 坏文件在写盘前会被先隔离，而不是被空状态覆盖。
+          loadError = error
+          loaded = false
+          log('日程状态读取失败，等待重试', error)
+        }
+      } finally {
         loading = null
       }
       return snapshot()
@@ -106,7 +121,22 @@ export function createAgendaRuntime({ file = null, now = Date.now, log = () => {
   async function persist() {
     if (file === null) return
     try {
-      await fs.mkdir(file.replace(/[\\/][^\\/]+$/, ''), { recursive: true })
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      // 读盘失败过的坏文件不能直接覆盖：先改名隔离，改不了名就这次不写。
+      if (loadError !== null) {
+        try {
+          await fs.rename(file, `${file}.corrupt-${Date.now()}`)
+          loadError = null
+        } catch (error) {
+          if (error?.code === 'ENOENT') {
+            // 文件已经不在了，没有可覆盖的坏文件，放行这次写入。
+            loadError = null
+          } else {
+            log('日程状态坏文件隔离失败，本次跳过写入', error)
+            return
+          }
+        }
+      }
       if (needsBackup) {
         try {
           await fs.copyFile(file, `${file}.bak`)
@@ -114,11 +144,15 @@ export function createAgendaRuntime({ file = null, now = Date.now, log = () => {
           if (error?.code !== 'ENOENT') log('日程状态迁移备份失败，继续写入', error)
         }
       }
+      // 先写临时文件再 rename：写到一半进程退出，最多留下 .tmp，
+      // 不会把正式文件截成半截 JSON。
+      const tmp = `${file}.tmp`
       await fs.writeFile(
-        file,
+        tmp,
         JSON.stringify({ schemaVersion: SCHEMA_VERSION, state }),
         'utf8'
       )
+      await fs.rename(tmp, file)
       needsBackup = false
     } catch (error) {
       log('日程状态写入失败', error)
@@ -161,8 +195,11 @@ export function createAgendaRuntime({ file = null, now = Date.now, log = () => {
     normalize()
     const at = now()
     const limits = DEFAULT_SUSPEND_LIMITS
-    const requested = Number.isFinite(minutes)
-      ? Math.round(minutes) * 60 * 1000
+    // 先转数值，让 "30" 这类字符串输入也能生效；转不出有限数才回落默认，
+    // 最后统一夹到 [minMs, maxMs]，避免 0 或超大值溜进状态。
+    const parsedMinutes = Number(minutes)
+    const requested = Number.isFinite(parsedMinutes)
+      ? Math.round(parsedMinutes) * 60 * 1000
       : limits.defaultMs
     const span = Math.min(limits.maxMs, Math.max(limits.minMs, requested))
 

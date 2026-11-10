@@ -42,8 +42,9 @@ export function auditPlan(plan) {
   const issues = []
   const segments = Array.isArray(plan?.segments) ? plan.segments : []
 
+  // 提示词要求 6~12 段，这里同样按 12 封顶，别让提示词和闸门各说各话。
   if (segments.length < 6) issues.push('too-few-segments')
-  if (segments.length > 14) issues.push('too-many-segments')
+  if (segments.length > 12) issues.push('too-many-segments')
 
   const kinds = new Set(segments.map((item) => item.kind))
   // 没有睡觉的一天，不管别的排得多漂亮，都不该被收下。
@@ -61,6 +62,23 @@ export function auditPlan(plan) {
 
   const covered = segments.reduce((sum, item) => sum + (item.endMinute - item.startMinute), 0)
   if (covered !== 24 * 60) issues.push('not-full-day')
+
+  // 总时长对得上不等于没有空洞：按开始时间排好，
+  // 首段必须从 0 开始、相邻段首尾相接、末段正好到 1440。
+  const sorted = [...segments].sort((a, b) => (a.startMinute ?? 0) - (b.startMinute ?? 0))
+  let continuous = sorted.length > 0 && sorted[0].startMinute === 0
+  if (continuous) {
+    let cursor = 0
+    for (const item of sorted) {
+      if (item.startMinute !== cursor) {
+        continuous = false
+        break
+      }
+      cursor = item.endMinute
+    }
+    if (continuous && cursor !== 24 * 60) continuous = false
+  }
+  if (!continuous) issues.push('gap')
 
   return { ok: issues.length === 0, issues }
 }

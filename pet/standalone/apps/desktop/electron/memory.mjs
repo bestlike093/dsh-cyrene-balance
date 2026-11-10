@@ -42,7 +42,10 @@ function scopeFromSource(source) {
   if (source === null || typeof source !== 'object') return 'desktop'
   if (typeof source.channel !== 'string' || source.channel === '') return 'desktop'
   if (source.channel !== 'qq') return 'desktop'
-  const chatType = source.chatType === 'group' ? 'group' : 'private'
+  // 只认 group / private 两种；channel 等拼错或缺失的 chatType 归 unknown，
+  // 不跟真正的私聊混在同一个桶里。
+  const chatType =
+    source.chatType === 'group' ? 'group' : source.chatType === 'private' ? 'private' : 'unknown'
   const openId = typeof source.openId === 'string' ? source.openId.trim() : ''
   return openId === '' ? `qq:${chatType}` : `qq:${chatType}:${openId}`
 }
@@ -64,6 +67,23 @@ const BLOCKED_TURN_REASONS = new Set(['secret', 'roleplay', 'greeting'])
 function clampText(text) {
   const value = typeof text === 'string' ? text : ''
   return value.length > MAX_TEXT_CHARS ? value.slice(0, MAX_TEXT_CHARS) : value
+}
+
+/** 中文两字片段的轻量相似度：只用于「这条新事实在不在说同一件事」。 */
+function bigrams(text) {
+  const value = String(text ?? '').replace(/\s+/g, '')
+  const result = new Set()
+  for (let i = 0; i < value.length - 1; i += 1) result.add(value.slice(i, i + 2))
+  return result
+}
+
+function textSimilarity(a, b) {
+  const left = bigrams(a)
+  const right = bigrams(b)
+  if (left.size === 0 || right.size === 0) return 0
+  let hit = 0
+  for (const item of left) if (right.has(item)) hit += 1
+  return hit / Math.max(left.size, right.size)
 }
 
 /**
@@ -100,19 +120,22 @@ export function createMemoryStore(options) {
       if (count <= limit) excess.delete(scope)
       else excess.set(scope, count - limit)
     }
-    if (excess.size === 0) return
+    if (excess.size === 0) return 0
 
     // 从前往后保留，过量的旧记录直接跳过；最新的必须留下。
     const kept = []
+    let trimmed = 0
     for (const item of records) {
       const left = excess.get(item.scope) ?? 0
       if (left > 0) {
         excess.set(item.scope, left - 1)
+        trimmed += 1
         continue
       }
       kept.push(item)
     }
     records = kept
+    return trimmed
   }
 
   /** @type {{ id: string, role: 'user'|'assistant', text: string, at: string }[]} */
@@ -124,6 +147,8 @@ export function createMemoryStore(options) {
   let dirty = false
   /** 读进来的是旧结构；下次落盘时顺手升级到 v2，不额外写一次盘。 */
   let needsRewrite = false
+  /** 损坏文件隔离失败时置真：禁止写盘，绝不覆盖那份读不出来的证据。 */
+  let writesBlocked = false
   /** 写入串行链，flush 能等到队列里的最后一份。 */
   let writeChain = Promise.resolve(true)
 
@@ -146,7 +171,7 @@ export function createMemoryStore(options) {
     }
   }
 
-  /** 损坏文件改名保留证据；读不出来就当空记忆，不猜测内容。 */
+  /** 损坏文件改名保留证据；读不出来就当空记忆，不猜测内容。改不了名就禁止写入。 */
   async function quarantine(error) {
     const fs = await import('node:fs/promises')
     const backup = `${filePath}.corrupt-${Date.now()}`
@@ -154,7 +179,8 @@ export function createMemoryStore(options) {
       await fs.rename(filePath, backup)
       log?.('记忆文件无法读取，已改名保留：', backup, String(error?.message ?? error))
     } catch (renameError) {
-      log?.('记忆文件隔离失败：', String(renameError?.message ?? renameError))
+      writesBlocked = true
+      log?.('记忆文件隔离失败，已禁止写入以避免覆盖证据：', String(renameError?.message ?? renameError))
     }
   }
 
@@ -222,7 +248,12 @@ export function createMemoryStore(options) {
               typeof item.supersededBy === 'string' ? item.supersededBy : ''
           }
         })
-      trimAllScopes()
+      const trimmed = trimAllScopes()
+      if (trimmed > 0) {
+        // 载入时就裁掉的过量旧记录要落盘才算数：标脏，下一次自然写入时生效。
+        dirty = true
+        log?.(`记忆载入时按上限 ${currentLimit()} 裁掉 ${trimmed} 条过量旧记录`)
+      }
       // 没有版本号或版本更旧，都算待升级；只标记，不主动写盘。
       needsRewrite = !Number.isFinite(version) || version < SCHEMA_VERSION
       updatedAt = typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : null
@@ -242,7 +273,10 @@ export function createMemoryStore(options) {
    * 有未落盘变更（dirty）才真正写，避免空转。
    */
   function writeNow() {
-    if (!available) return Promise.resolve(false)
+    if (!available || writesBlocked) {
+      if (writesBlocked) log?.('记忆写盘被禁止：上次读取失败且损坏文件无法隔离')
+      return Promise.resolve(false)
+    }
     const task = writeChain.then(async () => {
       if (!dirty && !needsRewrite) return true
       const snapshot = { version: SCHEMA_VERSION, updatedAt, records: [...records] }
@@ -347,7 +381,9 @@ export function createMemoryStore(options) {
       const stamp = Date.parse(item.at)
       const lastHit = Number.isFinite(Number(item.lastHitAt)) ? Number(item.lastHitAt) : 0
       const touchedAt = Math.max(Number.isFinite(stamp) ? stamp : 0, lastHit)
-      if (touchedAt > 0 && touchedAt < cutoff) {
+      // 时间戳读不出的旧记录按「从未被碰过」处理，照常变冷，
+      // 不让它们永远赖在日常检索候选集里。
+      if (touchedAt < cutoff) {
         item.cold = true
         changed = true
       }
@@ -398,7 +434,8 @@ export function createMemoryStore(options) {
       const stamp = Date.parse(item.at)
       const lastHit = Number.isFinite(Number(item.lastHitAt)) ? Number(item.lastHitAt) : 0
       const touchedAt = Math.max(Number.isFinite(stamp) ? stamp : 0, lastHit)
-      if (touchedAt === 0 || touchedAt >= cutoff) continue
+      // 时间戳读不出的旧记录按「从未被碰过」处理：该归档就归档。
+      if (touchedAt >= cutoff) continue
       item.archived = true
       item.archivedAt = new Date(at).toISOString()
       archived.push(item.id)
@@ -476,7 +513,12 @@ export function createMemoryStore(options) {
     for (const item of records) {
       if (item.scope !== scope || item.layer !== 'fact' || item.supersededBy !== '') continue
       const hitById = wanted.has(item.id)
-      const hitByWord = keywords.length > 0 && keywords.some((word) => item.text.includes(word))
+      // 关键词取代只认「足够长且真的出现」或「和这条新事实说的是同一件事」：
+      // 单个常用字（猫 / 好 / 忙）不再把所有沾边的旧事实一锅端。
+      const hitByWord =
+        keywords.length > 0 &&
+        (keywords.some((word) => word.length >= 3 && item.text.includes(word)) ||
+          textSimilarity(item.text, text) >= 0.4)
       if (!hitById && !hitByWord) continue
       item.supersededBy = id
       superseded.push(item.id)
@@ -520,9 +562,20 @@ export function createMemoryStore(options) {
 
   /**
    * 装配成提示词里的一段。没有记忆时返回空串，调用方据此不加这一段。
+   *
+   * 与 search 的可见性口径一致：被取代、已变冷、已归档的条目
+   * 不进提示词——「归档」就是不再影响她说话。
    */
   function digestText(count = 6, scope = null) {
-    const items = recent(count, scope)
+    const n = Number.isFinite(count) && count > 0 ? Math.floor(count) : 6
+    const pool =
+      typeof scope === 'string' && scope !== ''
+        ? records.filter((item) => item.scope === scope)
+        : records
+    const visible = pool.filter(
+      (item) => item.supersededBy === '' && !item.cold && !item.archived
+    )
+    const items = visible.slice(-n)
     if (items.length === 0) return ''
     const lines = items.map((item) => `${item.role === 'user' ? '用户' : '你'}：${item.text}`)
     return lines.join('\n')
@@ -657,8 +710,8 @@ export function createMemoryStore(options) {
     records = kept
     updatedAt = new Date().toISOString()
     dirty = true
-    void writeNow()
-    return { ok: true, removed }
+    // 落盘承诺随返回值给出：writeNow 从不 reject，调用方可 await persisted 确认磁盘状态。
+    return { ok: true, removed, persisted: writeNow() }
   }
 
   /** 删除单条。删完立刻落盘，不留在防抖窗口里。 */
@@ -672,8 +725,7 @@ export function createMemoryStore(options) {
     const [removed] = records.splice(index, 1)
     updatedAt = new Date().toISOString()
     dirty = true
-    void writeNow()
-    return { ok: true, removed: true, total: records.length, item: { ...removed } }
+    return { ok: true, removed: true, total: records.length, item: { ...removed }, persisted: writeNow() }
   }
 
   /**

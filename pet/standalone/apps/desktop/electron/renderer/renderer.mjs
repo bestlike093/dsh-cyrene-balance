@@ -22,6 +22,11 @@ import {
 } from '../../../../packages/core/dist/browser.js'
 import { HOST_CAPABILITY, SIZE_PROFILES, isPresenceQuietNow, mediaKindForName } from '../../../../packages/shared/dist/index.js'
 import { createMotionController } from './motion.mjs'
+import { MOOD_LEVEL_EMOTION, createExpressionController } from './expression.mjs'
+import { emojiToEmotion } from './emoji-expression-map.mjs'
+import { createExpressionOverlay } from './expression-overlay.mjs'
+import { describeCapability } from './capability-text.mjs'
+import { pickTouchReaction, zoneAt } from './touch-zones.mjs'
 import { attachAutoOutline, DEFAULT_OUTLINE_PREFERENCE } from './outline.mjs'
 import { pickBubbleEmojiUrl } from './bubble-emoji.mjs'
 
@@ -62,6 +67,10 @@ canvas.height = profile.h
 
 const banner = document.getElementById('banner')
 
+// 最近一次指针位置（窗口坐标）。气泡 / HUD / 空态卡等 DOM 更新后要按它重算命中；
+// 鼠标还没进过窗口时保持 null，重算直接跳过。
+let lastPointerClient = null
+
 // 主界面不再留状态栏：文案只做内部记录，同时上报给设置窗的诊断区。
 // 保留单一状态源，避免断言逻辑散落到各处。
 let lastStatus = '等待素材'
@@ -76,6 +85,8 @@ let mediaLabel = '未加载'
 function setEmptyState(visible) {
   if (emptyState === null) return
   emptyState.classList.toggle('hidden', !visible)
+  // 空态卡显隐直接改变 elementFromPoint 的结果，下一帧按最后指针位置重算穿透。
+  recomputeHit()
 }
 setEmptyState(true)
 
@@ -126,7 +137,7 @@ setInterval(() => {
   const aiSpeak = appSettings?.presence?.aiEnabled === true
   const speaking = bubbleHideTimer !== null
   // 开了 AI 台词就交给主进程定时开口，这边不再本地轮播，否则两条通路会抢气泡。
-  if (!aiSpeak && hasModel && bubbleOn && !speaking && Date.now() - lastSpeakAt >= SPEAK_GAP_MS) {
+  if (!aiSpeak && hasModel && bubbleOn && !speaking && !pluginCardOpen && !gameHideBubble && Date.now() - lastSpeakAt >= SPEAK_GAP_MS) {
     lastSpeakAt = Date.now()
     showBubble(bubbleTextFor(appSettings?.bubble?.mode ?? 'rotate', info))
   }
@@ -204,8 +215,10 @@ if (window.pet?.onLifecycle) {
   console.warn('[lifecycle] preload 未暴露 onLifecycle，窗口切走不会暂停')
 }
 
-// B2-3 接线：矩形命中。B2 阶段角色与画布等大，画布内任意一点都算「体内」，
-// 透明区域也会命中 —— 这是已知限制，不是 bug。
+// B2-3 接线：矩形命中。core 的 fullFrameRect 只回答「点是否落在整帧矩形内」，
+// 画布内任意一点都算「体内」，透明区域也会命中 —— 那是 core 原始判定的已知限制。
+// 渲染层在它之上另做一层像素判定：2D 静态画布走 isOpaqueHit 的 alpha 采样，
+// Live2D 走 live2dHitAt 的「包围盒粗判 + alpha 快照细判」；两条路径的透明区都不抢点击。
 //
 // 反馈动作：当前真素材（sheet-whale-2f）只有 idle 一个 clip，没有独立的 tap。
 // 所以播 idle 本身 —— 这只是「调用链走进了动作通道」，⛔ 不能当 B2 的验收证据：
@@ -227,7 +240,8 @@ let pressedOnPet = false
  * 算画布上非透明像素的外接矩形。
  *
  * 只在点到透明像素时才调用。返回 null 表示整幅画布都是空的 ——
- * 说明画面不在这一层（比如 WebGL / 还没画出第一帧），调用方要按整帧兜底。
+ * 说明这一层还没画出第一帧（只服务 2D 静态画布；Live2D 不经过这里），
+ * 调用方要按整帧兜底。
  */
 function canvasInkBounds(target) {
   try {
@@ -258,9 +272,42 @@ function canvasInkBounds(target) {
 }
 
 /**
- * 点击命中：先过整帧矩形，再按像素 alpha 判断。
- * 2D canvas 的透明区域不抢点击；Live2D / WebGL 或读取失败时回退整帧，
- * 保证现有渲染器不会因为拿不到像素而整体失去点击。
+ * 立绘墨迹外接矩形的缓存。
+ *
+ * canvasInkBounds 每次都要把整幅画布读回内存，而 updateStageMetrics 会被 resize、
+ * HUD 显隐、缩放变更反复触发，不能每拍都读一遍。
+ *
+ * 缓存 key 带上姿势下标：点击换姿势与定时轮换都会改 bundledPoseIndex，
+ * 于是所有换姿势路径自动失效重算，不必在每个调用点手动补一刀。
+ * 换素材时姿势下标可能不变，由 loadModel 显式失效。
+ */
+let inkBoundsCache = null
+let inkBoundsCacheKey = ''
+
+function invalidateInkBounds() {
+  inkBoundsCache = null
+  inkBoundsCacheKey = ''
+}
+
+function stageInkBounds() {
+  const key = `${canvas.width}x${canvas.height}#${bundledPoseIndex}`
+  if (inkBoundsCacheKey === key && inkBoundsCache !== null) return inkBoundsCache
+  inkBoundsCache = canvasInkBounds(canvas)
+  inkBoundsCacheKey = key
+  return inkBoundsCache
+}
+
+/**
+ * 2D 静态画布的像素级 alpha 命中：先过整帧矩形，再按像素 alpha 判断。
+ * canvas rect 内的透明像素不抢点击 —— 这是 2D 画布的实际口径。
+ *
+ * 范围只限静态立绘 / GIF / 帧序列。Live2D 的 WebGL 画布拿不到 2D 上下文，
+ * 不经过这里，由 live2dHitAt 显式走「包围盒粗判 + alpha 快照细判」的近似路径，
+ * 命中域之外一律穿透。
+ *
+ * 下面的「ctx 拿不到 / 整幅为空 → 整帧命中」只对 2D 画布做保守兜底：
+ * 正常 2D 画布不会走到（ctx 必然在、首帧画完墨迹必然在），
+ * 万一走到宁可整帧可点，也不让立绘整体失去点击。
  */
 function isOpaqueHit(target, point) {
   if (point === null) return false
@@ -276,7 +323,7 @@ function isOpaqueHit(target, point) {
     // 抗锯齿边缘的 alpha 很低，只要不是全透明就算摸到了她。
     if (alpha > 0) return true
     const bounds = canvasInkBounds(target)
-    // 整幅都是空的：画面不在这层（WebGL / 还没画首帧），整帧兜底。
+    // 整幅都是空的（还没画出首帧）：整帧兜底，宁可多点中也不让她彻底点不到。
     if (bounds === null) return true
     // 点到她的外接矩形也算命中。像素级判定太严，裙摆内侧、发丝缝隙
     // 都会被判成「没点到」，用户看到的就是「点了没反应」。
@@ -301,12 +348,18 @@ canvas.addEventListener('pointerdown', (event) => {
     { x: event.clientX - box.left, y: event.clientY - box.top },
     { x: box.width / canvas.width, y: box.height / canvas.height }
   )
-  const hit = isOpaqueHit(canvas, point)
+  // Live2D 在场时静态画布已被 hideStaticStage 收掉，这个监听器实际收不到事件；
+  // 仍把分支写显式：点击链路与穿透链路共用同一个 Live2D 命中口径，
+  // 将来把点击监听挂到 app.view 上时不用再想一遍命中该怎么算。
+  const hit =
+    live2dModel !== null && live2dApp !== null
+      ? live2dHitAt(event.clientX, event.clientY)
+      : isOpaqueHit(canvas, point)
   pressedOnPet = hit
 
   if (!hit) {
     // 记坐标：下次排查「点了没反应」时能区分是点偏了还是命中判定坏了。
-    console.info('[click] 未命中透明区', Math.round(point.x), Math.round(point.y))
+    console.info('[click] 未命中透明区', Math.round(point?.x ?? -1), Math.round(point?.y ?? -1))
     setMediaStatus(`点击未命中：透明区域 · hits=${hitCount}`)
     return
   }
@@ -341,7 +394,43 @@ canvas.addEventListener('pointerdown', (event) => {
   setMediaStatus(canPlay
     ? `点击命中 · hits=${hitCount} · action=${action} frame ${frames.before}→${frames.after}`
     : `点击命中 · hits=${hitCount}（当前模型无动画帧）`)
+
+  // Live2D 在场时按部位演本地反应：动作 + 临时表情 + 一句台词。
+  if (live2dModel !== null) reactToTouch(event.clientX, event.clientY)
 })
+
+/**
+ * Live2D 七段触摸反应：命中部位后播本地动作、盖一张临时表情、说一句台词。
+ * 分区与反应库结构来自 live2d-driver（见 touch-zones.mjs 文件头署名），
+ * 台词是昔涟口吻。动作播不出（模型不支持 / 正在播别的）不拦表情和台词。
+ * 坐标口径与 live2dHitAt 一致：client 坐标先折算成 canvas 视口局部坐标，
+ * 再按 live2dFittedRect 的包围盒算部位。
+ */
+function reactToTouch(clientX, clientY) {
+  const app = live2dApp
+  if (app === null) return
+  const rect = app.view.getBoundingClientRect()
+  if (!(rect.width > 0) || !(rect.height > 0)) return
+  const fitted = live2dFittedRect()
+  if (fitted === null) return
+  const localX = clientX - rect.left
+  const localY = clientY - rect.top
+  const bounds = {
+    x: fitted.left,
+    y: fitted.top,
+    width: fitted.right - fitted.left,
+    height: fitted.bottom - fitted.top
+  }
+  const { zone, relY, relX } = zoneAt(bounds, localX, localY)
+  const reaction = pickTouchReaction(zone)
+  if (motionController !== null) {
+    const result = motionController.play(reaction.motion, { source: 'touch' })
+    if (result.ok !== true) lastMotionFailure = `${reaction.motion}→${result.reason ?? 'unknown'}`
+  }
+  expressionOverlay?.setTemporary(reaction.emotion, 30000, { source: 'touch' })
+  showBubble(reaction.line, HOLD_NOTICE_MS, { speak: false })
+  setMediaStatus(`触摸 ${zone} · y=${relY} x=${relX} · ${reaction.line}`)
+}
 
 // 拖拽：pointerdown 只记起点，指针移动超过阈值才进入拖动状态。
 // 阈值用来区分「点击」与「拖动」—— 没有阈值的话手抖 1px 就会让窗口乱跑。
@@ -378,7 +467,6 @@ window.addEventListener('pointermove', (event) => {
 
 window.addEventListener('pointerup', () => {
   const wasDragging = dragging
-  const wasOnPet = pressedOnPet
 
   if (dragging) {
     // 只取最近 120ms 的样本：更早的轨迹属于「先慢慢挪再甩」里的慢速部分，
@@ -400,18 +488,9 @@ window.addEventListener('pointerup', () => {
     void window.pet?.dragEnd?.({ vx, vy })
   }
 
-  // 没拖动、按在角色身上、她也在场 —— 这才是单击，跟她说一句。
-  if (!wasDragging && wasOnPet && !hasModel) {
-    console.warn('[click] 已命中但模型不在场，台词没有触发')
-  }
-  if (!wasDragging && wasOnPet && hasModel) {
-    lastSpeakAt = Date.now()
-    pulsePetScale()
-    // 默认图片模式才有姿势池：先换一张，再让她说话。Live2D / GIF 不受影响。
-    void cycleBundledLook()
-    // 点一下属于「小喇叭」：即使设置成只在小喇叭被点时念，这一句也要出声。
-    void speakFromPresence()
-  }
+  // 单击 / 双击 / 三击的裁决统一交给手势系统（canvas 的 pointerup + tapCount），
+  // 这里只做拖动收尾与状态清理，不再直接说话——否则一次单击会被 window 和
+  // canvas 两个 pointerup 各触发一次 speak，连弹两颗台词气泡。
 
   dragStart = null
   dragging = false
@@ -431,6 +510,17 @@ let currentModel = null
 let motionController = null
 /** 上一次驱动过动作的心情档位，用来只在「变了」的时候动一下，不做每 60 秒抽风。 */
 let lastMotionMood = ''
+/**
+ * 表情控制器。和动作控制器同源：模型加载后才建，
+ * 但表情是持续状态，不跟着动作的播放/恢复节奏走。
+ */
+let expressionController = null
+/** 临时表情覆盖：贴纸换脸 / 触摸反应用，到期按墙钟回落。 */
+let expressionOverlay = null
+/** 最近一次能力成文；模型加载后算好，状态栏直接读。 */
+let lastCapabilityText = null
+/** 上一次设过的情绪，避免每 60 秒一拍都重播过渡。 */
+let lastExpressionTag = ''
 let currentUrl = null
 let loadFailed = false
 
@@ -557,12 +647,21 @@ async function applyBundledPose(index) {
   }
 }
 
-/** 单击时换下一张；没有姿势池就安静地什么都不做。 */
+/** 单击时随机换一张（避开当前这张）；只有一张也重绘当前张给点击反馈。 */
 async function cycleBundledLook() {
-  if (!bundledScene || bundledPoses.length < 2) return false
-  const next = (bundledPoseIndex + 1) % bundledPoses.length
+  if (!bundledScene || bundledPoses.length === 0) return false
+  let next = bundledPoseIndex
+  if (bundledPoses.length >= 2) {
+    // 随机选一张，避开当前这张；连续点击不再原地踏步。
+    while (next === bundledPoseIndex) {
+      next = Math.floor(Math.random() * bundledPoses.length)
+    }
+  }
   const ok = await applyBundledPose(next)
   if (ok) {
+    // 换姿势后头顶位置会变，墨迹缓存失效并重算锚点，气泡才不会贴到旧头顶上。
+    invalidateInkBounds()
+    updateStageMetrics()
     // 刚点完就重置计时，避免下一拍立刻又被自动换掉。
     scheduleBundledPose()
   }
@@ -750,6 +849,14 @@ async function loadModel(kind, file, label, spriteSheet) {
   setEmptyState(false)
   clearBanner()
   autoOutlineStage()
+  /* 静态图 / GIF 的 canvas 尺寸、以及随包立绘的 data-scene 底部对齐布局，
+     都在这之后才落定（activateBundledScene 在 loadModel 返回后才设标记）。
+     延后一帧再量立绘头顶，气泡锚点才不会算到居中布局的旧位置上。 */
+  requestAnimationFrame(() => {
+    // 换了素材，旧墨迹矩形不再有效；画布尺寸可能恰好没变，key 撞车会读到脏缓存。
+    invalidateInkBounds()
+    updateStageMetrics()
+  })
 }
 
 /**
@@ -848,12 +955,13 @@ const importZipBtn = document.getElementById('import-zip')
 const importFolderBtn = document.getElementById('import-folder')
 
 async function importModel(kind) {
-  const button = kind === 'zip' ? importZipBtn : importFolderBtn
   const label = kind === 'zip' ? '压缩包' : '文件夹'
-  if (button !== null) {
-    button.disabled = true
-    button.textContent = '导入中……'
-  }
+  // 导入期间把两个入口一起禁掉（与设置窗一致）：文件对话框可能挂十几秒，
+  // 只禁当前按钮的话另一个还能再点，两个导入进程会互相打架。
+  const buttons = [importZipBtn, importFolderBtn].filter((item) => item !== null)
+  for (const item of buttons) item.disabled = true
+  const activeButton = kind === 'zip' ? importZipBtn : importFolderBtn
+  if (activeButton !== null) activeButton.textContent = '导入中……'
   // 导入 100MB 级模型要几秒，给一句能看懂的状态，避免看起来像卡死。
   setMediaStatus(`正在读取${label}……`)
 
@@ -872,6 +980,9 @@ async function importModel(kind) {
       return
     }
 
+    // 成功也要走横幅：notifyBeta 走的是气泡，游戏模式（gameHideBubble）下会被吞掉，
+    // 导入结果这种一次性的反馈必须有一条不依赖气泡的通道，失败路径已有横幅则保持。
+    showBanner('模型导入成功')
     console.log('[models] 已导入', result.model?.id, '纹理', result.model?.textureCount)
     const loaded = await loadLive2DUrl(result.model?.url)
     if (loaded?.ok === true) {
@@ -884,10 +995,9 @@ async function importModel(kind) {
     setMediaStatus('导入失败')
     notifyBeta('导入的时候卡住了，再看看右上角写了什么')
   } finally {
-    if (button !== null) {
-      button.disabled = false
-      button.textContent = kind === 'zip' ? '导入模型压缩包' : '导入已解压的文件夹'
-    }
+    for (const item of buttons) item.disabled = false
+    if (importZipBtn !== null) importZipBtn.textContent = '导入模型压缩包'
+    if (importFolderBtn !== null) importFolderBtn.textContent = '导入已解压的文件夹'
   }
 }
 
@@ -941,6 +1051,10 @@ shadow.innerHTML = `<style>
      这么拆是因为角角必须探出气泡底边，而内层是 overflow:auto 的滚动容器 ——
      角角放在里面就会被算进 scrollHeight，短句也会凭空多出一条看不见的滚动区。 */
   .pet-bubble-wrap {
+    /* #app 整窗已经 no-drag（拖拽区吞 pointer 事件会把透明区卡在「可点」），
+       气泡本身要可点，no-drag 保持显式声明，语义自明：
+       （和 #stage 当年 C-84 步 2 踩的是同一个坑——按下被 app-region: drag 拿走）。 */
+    -webkit-app-region: no-drag;
     /* 角角尺寸照 cyrene-balance 的 .bubble::after：18×11、往下探 9px、左偏 42%。
        三个数都乘 --ui-scale，窗口缩放时角角跟着气泡一起长大缩小，不写死 px。 */
     --tail-w: calc(18px * var(--ui-scale, 1));
@@ -950,8 +1064,8 @@ shadow.innerHTML = `<style>
     /* 角角底色必须和气泡渐变的末端同色，否则接缝处会露出一条色差。 */
     --bubble-tail: var(--bubble-tail-bg, var(--bubble-tail-fill, #e3f0fd));
     position: absolute; left: 50%;
-    top: var(--bubble-top, 8px);
-    bottom: auto;
+    top: auto;
+    bottom: var(--bubble-anchor-bottom, var(--bubble-bottom, 11px));
     width: max-content;
     max-width: min(calc(100% - 20px), var(--bubble-width, 100%));
     opacity: 0;
@@ -1002,13 +1116,32 @@ shadow.innerHTML = `<style>
     pointer-events: auto;
     box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
   }
+  /* 长气泡提示：滚动条被藏掉了（scrollbar-width:none），内容溢出时用户不知道
+     下面还有字。只有真的溢出、且还没滚到底时才显示这层底部渐隐 + 「还能往下滚」
+     小字，滚到底自动消失。渐隐收在 --bubble-tail-fill 上而不是 --bubble-bg：
+     --bubble-bg 在 theme.css 里是一段渐变，不能当线性渐变的收尾色。 */
+  .pet-bubble-more {
+    position: absolute; left: 2px; right: 2px; bottom: 1px;
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    height: calc(20px * var(--ui-scale, 1));
+    padding-bottom: calc(2px * var(--ui-scale, 1));
+    pointer-events: none;
+    font-size: calc(10px * var(--ui-scale, 1));
+    color: var(--bubble-ink, #4a2b3a);
+    opacity: .8;
+    background: linear-gradient(to bottom, transparent, var(--bubble-tail-fill, #e3f0fd));
+  }
+  .pet-bubble-wrap[data-scrollable='1'] .pet-bubble-more { display: flex; }
+  .pet-bubble-wrap[data-at-bottom='1'] .pet-bubble-more { display: none; }
   /* 宽度按内容自然展开（max-content），再由 max-width 收住；
      用 fit-content 时浏览器给绝对定位元素的可用宽度会略小于整行，短句也会被折成两行。
      高度只受「立绘区上方那块」约束，超出才在内部滚动。 */
   .pet-bubble {
     position: absolute; left: 50%;
-    top: var(--bubble-top, 8px);
-    bottom: auto;
+    top: auto;
+    bottom: var(--bubble-anchor-bottom, var(--bubble-bottom, 11px));
     width: max-content;
     min-width: calc(56px * var(--ui-scale, 1));
     max-width: min(calc(100% - 20px), var(--bubble-width, 100%));
@@ -1062,7 +1195,7 @@ shadow.innerHTML = `<style>
      pointer-events 用 inherit：显隐期间的可点性只由 wrap 一个人说了算。 */
   .pet-bubble-wrap .pet-bubble,
   .pet-bubble-wrap .pet-bubble.show {
-    position: relative; left: auto; top: auto;
+    position: relative; left: auto; top: auto; bottom: auto;
     width: auto; max-width: 100%;
     transform: none; opacity: 1;
     transition: none; pointer-events: inherit;
@@ -1226,8 +1359,28 @@ let appSettings = null
 // 模块接口只有 bootstrap/teardown，运行期没法再接收新文本，内容归宿主。
 let bubbleHideTimer = null
 let activeAckSegment = null
-const HOLD_SPEAK_MS = 4000
-const HOLD_NOTICE_MS = 6000
+/* 最近一条普通气泡的文本。同一句在显示期间又被送来时只续命、不重建：
+   单击台词、主进程推送、1.2 秒轮询常常前后脚送到同一句，
+   每次都重建文本 / 心情 / ack，视觉上就是气泡闪一下。 */
+let lastBubbleText = ''
+
+/** 气泡淡出定时器统一在这里管：先清旧的再设新的，避免旧定时器提前收走新气泡。 */
+function scheduleBubbleHide(wrap, holdMs) {
+  if (bubbleHideTimer !== null) clearTimeout(bubbleHideTimer)
+  bubbleHideTimer = setTimeout(() => {
+    setBubbleShown(false)
+    renderBubbleAck(wrap, null)
+    activeAckSegment = null
+    bubbleHideTimer = null
+    // 自动淡出也改 DOM：下一帧重算穿透，鼠标不动时窗口状态才跟得上。
+    recomputeHit()
+  }, holdMs)
+}
+/* 气泡停留时长（毫秒）。改成 let 是为了让散在各处的引用一行都不用动：
+   applySettings() 读到设置里的 bubble.holdSeconds / noticeHoldSeconds 后直接覆盖。
+   原先写死 4000，双击看余额只停 4 秒，话还没读完就没了。 */
+let HOLD_SPEAK_MS = 8000
+let HOLD_NOTICE_MS = 10000
 const HOLD_ACK_MS = 10000
 
 // ---- 语音 ----
@@ -1311,6 +1464,48 @@ function bubbleTextNode(bubble) {
   return span
 }
 
+/** 展开 / 收起时气泡外溢提示的显隐要跟着内容高度走，滚动监听常驻气泡本体。 */
+const bubbleScrollHintBound = new WeakSet()
+
+/**
+ * 给气泡挂滚动监听与「还能往下滚」提示元素（幂等）。
+ * 提示放在 wrap 上而不是滚动容器里：容器 overflow-y:auto，放在里面会被一起
+ * 滚走；wrap 恰好就是气泡的外框，提示贴底即可。
+ */
+function attachBubbleScrollHint(bubble, wrap) {
+  if (!bubbleScrollHintBound.has(bubble)) {
+    bubbleScrollHintBound.add(bubble)
+    bubble.addEventListener('scroll', () => {
+      updateBubbleScrollHint()
+    })
+  }
+  if (wrap.querySelector('.pet-bubble-more') === null) {
+    const more = document.createElement('div')
+    more.className = 'pet-bubble-more'
+    more.textContent = '还能往下滚'
+    wrap.append(more)
+  }
+}
+
+/**
+ * 长气泡的「还能往下滚」提示显隐。
+ *
+ * 滚动条被 CSS 藏掉了，内容是否溢出只能靠 scrollHeight - clientHeight 判断；
+ * 滚到底（或插件卡接管了气泡）就藏起来，不再提示。
+ */
+function updateBubbleScrollHint() {
+  const wrap = bubbleWrapNode()
+  if (wrap === null) return
+  const bubble = wrap.querySelector('.pet-bubble')
+  if (bubble === null) return
+  const cardOpen = wrap.dataset.card === '1'
+  const overflow = !cardOpen && bubble.scrollHeight - bubble.clientHeight > 2
+  const atBottom =
+    overflow && bubble.scrollTop + bubble.clientHeight >= bubble.scrollHeight - 2
+  wrap.dataset.scrollable = overflow ? '1' : ''
+  wrap.dataset.atBottom = atBottom ? '1' : ''
+}
+
 /**
  * 把气泡包进外层容器。
  *
@@ -1321,11 +1516,15 @@ function bubbleTextNode(bubble) {
 function ensureBubbleWrap(bubble) {
   if (bubble === null) return null
   const parent = bubble.parentElement
-  if (parent !== null && parent.classList.contains('pet-bubble-wrap')) return parent
+  if (parent !== null && parent.classList.contains('pet-bubble-wrap')) {
+    attachBubbleScrollHint(bubble, parent)
+    return parent
+  }
   const wrap = document.createElement('div')
   wrap.className = 'pet-bubble-wrap'
   bubble.replaceWith(wrap)
   wrap.append(bubble)
+  attachBubbleScrollHint(bubble, wrap)
   return wrap
 }
 
@@ -1447,6 +1646,8 @@ function renderBubbleAck(wrap, segment) {
     void window.pet?.ackBalance?.(segment)
     hideBubbleNow()
   }
+  // 「知道了」出现 / 消失都会改 elementFromPoint 的结果，下一帧重算穿透。
+  recomputeHit()
 }
 
 /** 收起或换句时把按钮一起带走，避免透明状态下还能点到上一段的 ack。 */
@@ -1468,6 +1669,10 @@ function setBubbleShown(shown) {
   bubble.classList.toggle('show', shown)
   wrap?.classList.toggle('show', shown)
   syncBubbleReserve(wrap, shown)
+  // 显隐后内容高度才落定，下一帧补一次「还能往下滚」提示的显隐。
+  if (shown) requestAnimationFrame(updateBubbleScrollHint)
+  // 穿透判定还停在旧值上：鼠标不动时窗口不会跟着显隐改。
+  recomputeHit()
   return bubble
 }
 
@@ -1477,7 +1682,7 @@ let bubbleReserveTimer = null
 
 /**
  * 气泡是绝对定位，本身不占文档流；这里把它的实际高度写成 --bubble-reserve，
- * 由 #stage-area 的 padding-top 让出空间，立绘就不会被盖住。
+ * 由 #stage-area 的 border-top 让出空间，立绘就不会被盖住。
  * 收起时等淡出结束再归还空间，避免立绘在半透明气泡底下跳一下。
  */
 function syncBubbleReserve(wrap, shown) {
@@ -1496,14 +1701,8 @@ function syncBubbleReserve(wrap, shown) {
   requestAnimationFrame(() => {
     if (wrap === null) return
     const apply = () => {
-      // 底边取气泡和 ack 按钮里更靠下的那个；再留 6px 呼吸位，水滴探出的 9px 也在高度里。
-      const ack = wrap.querySelector('.pet-bubble-ack')
-      const bottom = Math.max(
-        wrap.getBoundingClientRect().bottom,
-        ack === null ? 0 : ack.getBoundingClientRect().bottom
-      )
-      const reserve = Math.ceil(bottom + 6)
-      root.style.setProperty('--bubble-reserve', `${reserve}px`)
+      // 气泡已改「底边锚定立绘头顶、向上生长」：不再往下压立绘，无需立绘区让位。
+      root.style.setProperty('--bubble-reserve', '0px')
     }
     // 淡入是缩放过渡，rAF 这一刻量到的是缩小态；过渡结束后再补一次，立绘才不会被压 2px。
     apply()
@@ -1529,6 +1728,8 @@ function hideBubbleNow() {
  * options.speak 传 false 表示只出字不出声（导入成功/失败这类系统提示）。
  */
 function showBubble(text, holdMs = HOLD_SPEAK_MS, options = {}) {
+  // 游戏模式下她把嘴闭上：任何来源的气泡都不弹，别挡在游戏画面上。
+  if (gameHideBubble) return
   if (typeof text !== 'string' || text === '') return
   const bubble = bubbleNode()
   if (bubble === null) {
@@ -1546,6 +1747,23 @@ function showBubble(text, holdMs = HOLD_SPEAK_MS, options = {}) {
   // UI 闸：同一段正在显示时，重复 tick 不重置气泡，也不叠第二颗「知道了」。
   if (ackSegment !== null && ackSegment === activeAckSegment && bubbleHideTimer !== null) return
 
+  /* 同一条普通气泡正在显示：只把停留时间续上，内容、心情、ack 全部保持原样。 */
+  if (
+    ackSegment === null &&
+    activeAckSegment === null &&
+    text === lastBubbleText &&
+    bubbleHideTimer !== null
+  ) {
+    const sameWrap = ensureBubbleWrap(bubble)
+    /* 续命也要确保她还站在台上。气泡可能被别处收过（关卡片、进游戏模式），
+       而 lastBubbleText / bubbleHideTimer 都还留着旧值；这时只重设定时器，
+       同一句话再送进来就永远不显示了 —— 表现就是「点了没反应」。 */
+    setBubbleShown(true)
+    scheduleBubbleHide(sameWrap, holdMs)
+    return
+  }
+  lastBubbleText = text
+
   bubbleTextNode(bubble).textContent = text
   applyBubbleTier(bubble, text)
   const wrap = ensureBubbleWrap(bubble)
@@ -1555,13 +1773,9 @@ function showBubble(text, holdMs = HOLD_SPEAK_MS, options = {}) {
   renderBubbleAck(wrap, ackSegment)
   activeAckSegment = ackSegment
 
-  if (bubbleHideTimer !== null) clearTimeout(bubbleHideTimer)
-  bubbleHideTimer = setTimeout(() => {
-    setBubbleShown(false)
-    renderBubbleAck(wrap, null)
-    activeAckSegment = null
-    bubbleHideTimer = null
-  }, holdMs)
+  // 文本换掉后内容高度变了，下一帧补一次「还能往下滚」提示的显隐。
+  requestAnimationFrame(updateBubbleScrollHint)
+  scheduleBubbleHide(wrap, holdMs)
   if (options.speak !== false) void speakVoice(text, options.reason ?? 'auto')
 }
 
@@ -1664,7 +1878,10 @@ const BUBBLE_RADIUS_BASE = 12
 
 function bubbleRadiusCss(radius) {
   const raw = Number(radius)
-  const factor = Number.isFinite(raw) ? Math.max(0, raw) / BUBBLE_RADIUS_BASE : 1
+  /* 0（以及缺值）= 用上面那组参考库的不对称圆角，也就是 factor 1。
+     原先 0 会算出 factor 0，把四个角全削成直角，和 CSS 兜底值、
+     以及 DEFAULTS.bubbleRadius = 0 的默认配置正好相反 —— 气泡一直方着就是这个原因。 */
+  const factor = Number.isFinite(raw) && raw > 0 ? raw / BUBBLE_RADIUS_BASE : 1
   return BUBBLE_RADIUS_SHAPE
     .map((corner) => `calc(${(corner * factor).toFixed(1)}px * var(--ui-scale))`)
     .join(' ')
@@ -1722,6 +1939,9 @@ const BUBBLE_FONTS = {
   mono: '"Cascadia Mono", "Consolas", monospace'
 }
 
+/** 上一次打过的锚点探针内容；数值没变就不重复打，免得 resize / HUD 每拍刷屏。 */
+let lastAnchorProbe = ''
+
 /**
  * 气泡贴头顶：顶部留白固定，水平居中；最大高度只吃立绘区上方那块。
  *
@@ -1734,15 +1954,77 @@ function updateStageMetrics() {
   const stageHeight = stage !== null && stage.clientHeight > 0 ? stage.clientHeight : window.innerHeight
   const hudHeight = hud !== null && hud.hidden === false ? hud.offsetHeight : 0
   const top = Math.max(6, Math.round(window.innerHeight * 0.018))
-  // 默认只吃立绘区上方 42%；设置里填了高度就取两者较小值，让这个设置仍然真实生效。
-  const naturalMax = Math.max(56, Math.round(stageHeight * 0.42))
+
+  /* 气泡贴立绘头顶、向上生长：底边锚在头顶，不是状态条上沿。
+     Live2D 底部对齐，头顶到窗口底部 = 状态栏高 + 模型缩放后高度（scale.set() 后 height 即缩放值）。
+     静态图 / GIF 时 live2dModel 为 null，直接量 #stage 的渲染顶边：#modules 与 .module-layer
+     都是 inset:0 铺满整窗，wrap 的 bottom 参照窗口底部，所以头顶锚点 = innerHeight - rect.top。 */
+  const liveHeight =
+    live2dModel !== null && Number.isFinite(live2dModel.height) ? live2dModel.height : 0
+  let anchorBottom = hudHeight + liveHeight
+  const rect = canvas.getBoundingClientRect()
+  // 只有静态图 / GIF 需要靠像素量头顶；Live2D 直接用模型高度。
+  const ink = live2dModel === null ? stageInkBounds() : null
+  if (live2dModel === null) {
+    if (rect.height > 0 && canvas.style.display !== 'none') {
+      /* canvas 的顶边不等于立绘头顶。立绘是在画布内部按比例绘制的，画布本身铺满
+         整个立绘区，直接拿 rect.top 当头顶会把锚点算得过高：气泡与提问卡的底边
+         被顶到窗口上沿之外，看上去就是「卡片没了 / 点了她也不说话」。
+         改用非透明像素的外接矩形量真实头顶，再按 CSS 与画布的比例换算回窗口坐标。
+         量不到墨迹（首帧还没画出来）时退回画布顶边，至少不会比原来更差。 */
+      const scaleY = canvas.height > 0 ? rect.height / canvas.height : 1
+      const headTop = ink !== null ? rect.top + ink.top * scaleY : rect.top
+      anchorBottom = window.innerHeight - headTop
+    }
+  }
+  anchorBottom = Math.max(0, Math.round(anchorBottom))
+
+  /* 头顶余量：头顶到窗口顶部还剩多少地方。气泡与提问卡都不能超过它，
+     否则向上生长会顶出窗口被裁掉一截。余量不足时如实往下钳到 0，
+     不再用 56px 下限硬撑 —— 硬撑出来的那 56px 正是会顶出窗口的部分。 */
+  const headroom = Math.max(0, Math.round(window.innerHeight - anchorBottom - top))
+
+  /* 气泡最大高度：上限就是头顶的真实余量，maxHeight 直接钳到它，
+     不再叠加 56px 下限（否则余量小于 56 时气泡又会顶出窗口）。
+     旧规则是「立绘区高度的 42%」，那是气泡还得从立绘区里挤空间的时代定的；
+     现在窗口专门为气泡加高了一段（windowShell.js 的 BUBBLE_HEADROOM_RESERVE），
+     气泡用的是立绘区之外的专属空间，再拿 stageHeight 卡上限只会把气泡白白压小
+     （立绘区 291 时算出 122，而头顶实际有 274 可用）。
+     设置里填了高度仍然真实生效，与余量取较小值。 */
   const limit = Number(appSettings?.bubble?.height ?? 0)
-  const maxHeight =
-    limit > 0 ? Math.min(naturalMax, Math.round(limit * currentUiScale())) : naturalMax
+  const wanted = limit > 0 ? Math.round(limit * currentUiScale()) : headroom
+  const maxHeight = Math.min(wanted, headroom)
+
   root.setProperty('--bubble-top', `${top}px`)
   root.setProperty('--bubble-max-height', `${maxHeight}px`)
+  root.setProperty('--bubble-headroom', `${headroom}px`)
   // 占位卡还在底部，继续按状态条上沿让位。
   root.setProperty('--bubble-bottom', `${hudHeight === 0 ? 11 : hudHeight + 11}px`)
+  root.setProperty('--bubble-anchor-bottom', `${anchorBottom}px`)
+
+  /* 锚点探针：把参与计算的每个量一次打全。
+     排查「气泡 / 提问卡跑哪去了」时，靠这一行就能判定是量错了头顶还是余量被夹到下限，
+     不用再回来猜。 */
+  const probe = [
+    `ih=${window.innerHeight}`,
+    `stage=${stageHeight}`,
+    `hud=${hudHeight}`,
+    `rectTop=${Math.round(rect.top)}`,
+    `rectH=${Math.round(rect.height)}`,
+    `cvs=${canvas.width}x${canvas.height}`,
+    `ink=${ink === null ? 'null' : `${ink.top}-${ink.bottom}`}`,
+    `anchor=${anchorBottom}`,
+    `headroom=${headroom}`,
+    `maxH=${maxHeight}`,
+    `live=${live2dModel !== null}`
+  ].join(' ')
+  if (probe !== lastAnchorProbe) {
+    lastAnchorProbe = probe
+    console.info('[anchor]', probe)
+  }
+
+  // max-height 变了，气泡可滚动性可能跟着变，顺手刷一次「还能往下滚」提示。
+  updateBubbleScrollHint()
 }
 
 function applyHud() {
@@ -1784,6 +2066,8 @@ function applyHud() {
   }
   // 显隐与档位一变，气泡要让出的高度也跟着变。
   updateStageMetrics()
+  // 显隐 / 档位一变，命中面跟着变；下一帧按最后指针位置重算穿透。
+  recomputeHit()
 }
 
 // 夜间不扰可能跨过起止分钟：定时重算一次，不依赖设置变更事件。
@@ -1983,13 +2267,41 @@ function hudNet() {
 let lastMotionFailure = ''
 
 /**
+ * 心情变了就让脸跟着变。
+ *
+ * 情绪只决定「哪张脸」，不决定「做什么动作」——动作仍由 driveMotionByMood 管。
+ * 同一个情绪重复到达时只维持、不重播过渡，否则 60 秒一拍会让表情一直抖。
+ */
+function driveExpression(tag) {
+  if (expressionController === null) return
+  if (typeof tag !== 'string' || tag === '') return
+
+  if (tag === lastExpressionTag) {
+    // 维持当前表情：Cubism 每帧会重置参数，这里补一次写入。
+    expressionController.apply(tag, { source: 'mood' })
+    return
+  }
+  lastExpressionTag = tag
+  const result = expressionController.apply(tag, { source: 'mood' })
+  if (result.ok !== true) {
+    lastExpressionTag = ''
+    setMediaStatus(`表情 ${tag} 未生效：${result.reason ?? 'unknown'}`)
+  }
+}
+
+/**
  * 心情变了就让立绘跟着动一下。
  *
  * 只在档位切换时触发：60 秒一拍的心情同步如果每拍都播，立绘会一直抽。
  * 播不出来（模型不支持、正在播别的）就把原因记下来，展开行能看到。
  */
-function driveMotionByMood(level) {
+function driveMotionByMood(level, emotion) {
   if (hud !== null) hud.dataset.moodLevel = level
+  // 表情是持续状态，先于动作落地：动作播完会还原，表情不该跟着被抹掉。
+  // 优先用主进程给的 emotion；没有才按心情档位兜底。
+  const expressionTag =
+    typeof emotion === 'string' && emotion !== '' ? emotion : MOOD_LEVEL_EMOTION[level] ?? 'neutral'
+  driveExpression(expressionTag)
   // 默认图片模式的表情跟姿势走；其他媒体回落到状态栏心情。
   if (!bundledScene) renderBubbleMood(level)
   if (motionController === null || typeof level !== 'string' || level === '') return
@@ -2011,6 +2323,19 @@ function motionStatusText() {
   return lastMotionFailure === '' ? text : `${text} · 未播 ${lastMotionFailure}`
 }
 
+/** 表情状态文案：走的是自带表情还是参数姿态，如实写出来。 */
+function expressionStatusText() {
+  if (expressionController === null) return '表情：未接线'
+  return expressionController.statusText()
+}
+
+/** 能力成文一行版：Lv 档位 + 能做/能拼出各几项。 */
+function capabilityStatusText() {
+  if (lastCapabilityText === null) return '能力：未接线'
+  const text = lastCapabilityText
+  return `能力 Lv.${text.level}（${text.levelLabel}）· 能做 ${text.can.length} 项 · 拼出 ${text.derived.length} 项`
+}
+
 /**
  * 详细区最后一段：今日消费与动作通道状态。
  * 都是诊断信息，平时收在 .hud-detail 里，点开才占版面。
@@ -2020,7 +2345,9 @@ function hudExtra() {
   extra.className = 'hud-extra'
   extra.append(
     hudLine(`今日 ${todayText}`, 'strong'),
-    hudLine(motionStatusText(), 'hud-motion')
+    hudLine(expressionStatusText(), 'hud-motion'),
+    hudLine(motionStatusText(), 'hud-motion'),
+    hudLine(capabilityStatusText(), 'hud-motion')
   )
   return extra
 }
@@ -2116,6 +2443,8 @@ hud?.addEventListener('click', () => {
   syncHudExpanded()
   renderHud(lastHudInfo)
   updateStageMetrics()
+  // 展开 / 收起改变状态条高度，命中面跟着变，下一帧重算穿透。
+  recomputeHit()
 })
 
 // 状态栏时间每分钟走一格；隐藏时不重绘，省掉没必要的 DOM 重建。
@@ -2159,7 +2488,9 @@ async function refreshMood() {
     const result = await window.pet?.presenceMood?.()
     if (result?.ok === true && typeof result.mood?.label === 'string' && hud !== null) {
       hud.dataset.mood = result.mood.label
-      if (typeof result.mood.level === 'string') driveMotionByMood(result.mood.level)
+      if (typeof result.mood.level === 'string') {
+        driveMotionByMood(result.mood.level, result.mood.emotion)
+      }
       renderHud(lastHudInfo)
     }
   } catch (error) {
@@ -2249,6 +2580,8 @@ function applyUiSettings(next) {
   const THEME_PRESETS = { OceanBlue: 'blue', SakuraPink: 'pink', Paper: 'ink' }
   const preset = next.theme?.preset
   document.documentElement.dataset.theme = THEME_PRESETS[preset] ?? 'pink'
+  // data-theme 一换就把新的 token 值推进 shadow，卡片和气泡才跟着主题走。
+  syncThemeTokensToShadow()
 
   const bubble = next.bubble ?? {}
   const bubbleWidth = Number(bubble.width ?? 0)
@@ -2256,6 +2589,12 @@ function applyUiSettings(next) {
   modulesHost.style.setProperty('--bubble-width', bubbleWidth > 0 ? `${bubbleWidth}px` : '100%')
   modulesHost.style.setProperty('--bubble-line-height', String(bubble.lineHeight ?? 1.5))
   modulesHost.style.setProperty('--bubble-alpha', String(bubble.alpha ?? 0.92))
+  /* 气泡停留时长：设置里以秒为单位，覆盖模块级的 HOLD_* 变量。
+     没设置或值非法时保留默认，不会让气泡变成一闪而过。 */
+  const holdSeconds = Number(bubble.holdSeconds)
+  if (Number.isFinite(holdSeconds) && holdSeconds >= 1) HOLD_SPEAK_MS = Math.round(holdSeconds * 1000)
+  const noticeSeconds = Number(bubble.noticeHoldSeconds)
+  if (Number.isFinite(noticeSeconds) && noticeSeconds >= 1) HOLD_NOTICE_MS = Math.round(noticeSeconds * 1000)
   applyBubbleArt(bubble)
   // 字号 / 留白 / 圆角统一跟着窗口缩放走，三样一起长、一起收。
   applyUiScale()
@@ -2372,6 +2711,77 @@ async function bootModules() {
   }
 }
 
+// ---------- 窗口底图：DSH 背景库的 window 槽 ----------
+// 插件把四个位置各选哪张图写进 live.json，桌宠只认 window 这一槽；
+// 图走 pet-media://background/<文件名>，和插件存的是同一份文件。
+const BG_POLL_MS = 1200
+let bgSignature = ''
+let bgTimer = null
+
+function readSlotWindow(live) {
+  const slots = live?.background?.slots
+  const slot = slots !== null && typeof slots === 'object' ? slots.window : null
+  if (slot === null || typeof slot !== 'object') return null
+  const id = typeof slot.id === 'string' ? slot.id : ''
+  if (id === '') return null
+  const num = (value, min, max, fallback) => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback
+  }
+  return {
+    id,
+    posX: num(slot.posX, 0, 100, 50),
+    posY: num(slot.posY, 0, 100, 50),
+    zoom: num(slot.zoom, 1, 3, 1),
+    dim: num(slot.dim, 0, 0.85, 0),
+    blur: num(slot.blur, 0, 24, 0),
+  }
+}
+
+function paintWindowBackground(slot) {
+  const layer = document.getElementById('bg-layer')
+  if (layer === null) return
+  if (slot === null) {
+    layer.dataset.on = '0'
+    layer.style.backgroundImage = 'none'
+    return
+  }
+  // 遮罩叠在图上，和 DSH 页面用的是同一套写法
+  const url = `pet-media://background/${encodeURIComponent(slot.id)}`
+  layer.dataset.on = '1'
+  layer.style.backgroundImage =
+    `linear-gradient(rgba(255, 250, 253, ${slot.dim}), rgba(255, 250, 253, ${slot.dim})), url("${url}")`
+  layer.style.backgroundPosition = `${slot.posX}% ${slot.posY}%`
+  layer.style.backgroundSize = 'cover'
+  // 放大用 transform：cover 先把图铺满，再以取景锚点为中心等比放大
+  layer.style.transform = `scale(${slot.zoom})`
+  layer.style.transformOrigin = `${slot.posX}% ${slot.posY}%`
+  layer.style.filter = slot.blur > 0 ? `blur(${Math.min(12, slot.blur)}px)` : 'none'
+}
+
+async function syncWindowBackground() {
+  try {
+    const live = await window.pet?.pluginLive?.()
+    const slot = readSlotWindow(live)
+    const signature = slot === null
+      ? ''
+      : `${slot.id}|${slot.posX}|${slot.posY}|${slot.zoom}|${slot.dim}|${slot.blur}`
+    if (signature === bgSignature) return
+    bgSignature = signature
+    paintWindowBackground(slot)
+  } catch {
+    // 插件没在跑时没有 live.json，静默当作「不铺图」，不刷控制台
+  }
+}
+
+if (document.getElementById('bg-layer') !== null) {
+  void syncWindowBackground()
+  bgTimer = setInterval(syncWindowBackground, BG_POLL_MS)
+  window.addEventListener('beforeunload', () => {
+    if (bgTimer !== null) clearInterval(bgTimer)
+  })
+}
+
 void bootModules()
 
 // 状态栏的三条数据源：指标、头像、心情。任一条失败都只影响自己那一格。
@@ -2410,7 +2820,32 @@ function attachMotionAndOutline(app, model) {
       setMediaStatus(`动作 ${event.key} · 通道 ${event.channel} · 来源 ${event.source}`)
     }
   })
-  motionController.refresh()
+  const motionCap = motionController.refresh()
+
+  // 表情控制器与动作同源，但生命周期独立：动作播完还原，表情保持。
+  expressionController?.stop()
+  expressionController = createExpressionController({
+    getModel: () => live2dModel ?? currentModel,
+    ticker: app?.ticker ?? null,
+    onEvent: (event) => {
+      if (typeof event.tag !== 'string') return
+      setMediaStatus(`表情 ${event.tag} · 通道 ${event.channel} · 来源 ${event.source ?? 'auto'}`)
+    }
+  })
+  const expressionCap = expressionController.refresh()
+
+  // 临时表情覆盖：贴纸换脸 / 触摸反应用，到期按墙钟回落（驱动方案）。
+  expressionOverlay?.cancel()
+  expressionOverlay = createExpressionOverlay({
+    expression: expressionController,
+    ticker: app?.ticker ?? null
+  })
+
+  // 能力成文：Lv.1-5 + 能做什么/能拼出什么/做不到什么，状态栏展开区展示。
+  lastCapabilityText = describeCapability({
+    motionCapability: motionCap,
+    expressionCapability: expressionCap
+  })
 
   detachOutline?.()
   detachOutline = attachAutoOutline({
@@ -2433,6 +2868,7 @@ function attachMotionAndOutline(app, model) {
   const level = hud?.dataset.moodLevel
   if (typeof level === 'string' && level !== '') {
     lastMotionMood = ''
+    lastExpressionTag = ''
     driveMotionByMood(level)
   }
   if (hud !== null && hud.hidden === false) renderHud(lastHudInfo)
@@ -2527,8 +2963,135 @@ function disposeLive2D() {
     live2dModel = null
   }
   if (live2dApp !== null) {
+    live2dApp.renderer?.off?.('postrender', onLive2dPostRender)
     live2dApp.destroy(true, { children: true })
     live2dApp = null
+  }
+  // 命中快照随模型一起作废：下一层素材进来时重新探测，不带旧像素。
+  live2dAlphaCanvas = null
+  live2dAlphaCtx = null
+  live2dAlphaStamp = 0
+  live2dAlphaBroken = false
+}
+
+// ---------- Live2D 命中（MEM-128）----------
+//
+// WebGL 画布没有 2D 上下文，isOpaqueHit 的像素判定在它身上永远走
+// 「ctx === null → 整帧命中」，透明区会吞掉整块矩形的点击与穿透。
+// 这里换一条显式路径：先用模型当前包围盒粗判（包围盒之外一律穿透），
+// 包围盒之内再尽量读像素 alpha；alpha 读不到才退回「包围盒即命中」的近似。
+// 取舍写在这里：WebGL 无像素级 alpha，快照也只是最近一帧的低清拷贝，
+// 动作播得很快时包围盒内个别像素可能滞后 —— 宁可在包围盒内略多命中，
+// 也不回到「整窗矩形」的旧行为。
+
+/** 快照分辨率：600×800 的画布压到 150×200，alpha 判定够用，读回量是整帧的 1/16。 */
+const LIVE2D_ALPHA_RES = 0.25
+/** 快照刷新下限：拖动 / 连续移动时每 90ms 最多拷一次，别把渲染循环变成读屏。 */
+const LIVE2D_ALPHA_SNAPSHOT_MS = 90
+
+let live2dAlphaCanvas = null
+let live2dAlphaCtx = null
+let live2dAlphaStamp = 0
+/** 采样失败过就退回包围盒近似，不再每帧重试。 */
+let live2dAlphaBroken = false
+
+/**
+ * 把 WebGL 画布当前帧拷进低清 2D 快照，供命中判定取样。
+ *
+ * WebGL 默认不留后备缓冲，交换之后画布内容是空的，所以拷贝必须挂在
+ * renderer 的 postrender 上（描边采样走的就是同一条已验证的路），
+ * 而不是开 preserveDrawingBuffer 让每一帧都多一次全屏拷贝。
+ */
+function refreshLive2dAlphaSnapshot() {
+  const app = live2dApp
+  if (app === null || live2dAlphaBroken) return
+  try {
+    const view = app.view
+    const w = Math.max(1, Math.round(view.clientWidth * LIVE2D_ALPHA_RES))
+    const h = Math.max(1, Math.round(view.clientHeight * LIVE2D_ALPHA_RES))
+    if (
+      live2dAlphaCanvas === null ||
+      live2dAlphaCanvas.width !== w ||
+      live2dAlphaCanvas.height !== h
+    ) {
+      live2dAlphaCanvas = document.createElement('canvas')
+      live2dAlphaCanvas.width = w
+      live2dAlphaCanvas.height = h
+      live2dAlphaCtx = live2dAlphaCanvas.getContext('2d', { willReadFrequently: true })
+      if (live2dAlphaCtx === null) throw new Error('拿不到 2d 上下文')
+    }
+    live2dAlphaCtx.clearRect(0, 0, w, h)
+    live2dAlphaCtx.drawImage(view, 0, 0, view.width, view.height, 0, 0, w, h)
+  } catch {
+    // 上下文丢失 / 驱动不支持：退回包围盒近似，不反复打扰。
+    live2dAlphaBroken = true
+    live2dAlphaCanvas = null
+    live2dAlphaCtx = null
+  }
+}
+
+/** postrender 里的节流刷新：帧率再高，快照也最多 90ms 一张。 */
+function onLive2dPostRender() {
+  if (live2dAlphaBroken || live2dApp === null) return
+  const now = performance.now()
+  if (now - live2dAlphaStamp < LIVE2D_ALPHA_SNAPSHOT_MS) return
+  live2dAlphaStamp = now
+  refreshLive2dAlphaSnapshot()
+}
+
+/** 模型铺满画布后的包围盒（CSS 像素；autoDensity 下 stage 坐标即 CSS 像素）。 */
+function live2dFittedRect() {
+  const model = live2dModel
+  if (model === null) return null
+  const w = Number.isFinite(model.width) ? model.width : 0
+  const h = Number.isFinite(model.height) ? model.height : 0
+  const x = Number.isFinite(model.x) ? model.x : 0
+  const y = Number.isFinite(model.y) ? model.y : 0
+  if (!(w > 0) || !(h > 0)) return null
+  return { left: x, top: y, right: x + w, bottom: y + h }
+}
+
+/**
+ * Live2D 分支的命中判定（点击与穿透共用）。
+ *
+ * WebGL 无像素级 alpha，用「运动包围盒近似」：
+ *   1. 包围盒外一律穿透 —— 不再整窗矩形；
+ *   2. 包围盒内尽量用 alpha 快照细判；快照不可用才按「包围盒即命中」近似。
+ * 运动期间模型会小幅位移，包围盒外扩一点吸收，避免「人还在原地却点不到」。
+ */
+function live2dHitAt(clientX, clientY) {
+  const app = live2dApp
+  const model = live2dModel
+  if (app === null || model === null) return false
+  const rect = app.view.getBoundingClientRect()
+  if (!(rect.width > 0) || !(rect.height > 0)) return false
+  const localX = clientX - rect.left
+  const localY = clientY - rect.top
+  if (localX < 0 || localY < 0 || localX >= rect.width || localY >= rect.height) return false
+
+  const fitted = live2dFittedRect()
+  if (fitted === null) return false
+  const pad = 12 * currentUiScale()
+  if (
+    localX < fitted.left - pad ||
+    localX > fitted.right + pad ||
+    localY < fitted.top - pad ||
+    localY > fitted.bottom + pad
+  ) {
+    return false // 包围盒外：透明区，一律穿透
+  }
+
+  if (live2dAlphaCanvas === null || live2dAlphaCtx === null) return true
+  const sx = Math.floor((localX / rect.width) * live2dAlphaCanvas.width)
+  const sy = Math.floor((localY / rect.height) * live2dAlphaCanvas.height)
+  if (sx < 0 || sy < 0 || sx >= live2dAlphaCanvas.width || sy >= live2dAlphaCanvas.height) {
+    return true
+  }
+  try {
+    const alpha = live2dAlphaCtx.getImageData(sx, sy, 1, 1).data[3]
+    return alpha > 8
+  } catch {
+    return true
   }
 }
 
@@ -2585,6 +3148,8 @@ async function loadLive2DUrl(modelUrl) {
   hideStaticStage()
   host.appendChild(app.view)
   live2dApp = app
+  // 命中快照挂在 postrender 上：快照只在渲染循环里拷贝，读到的才是有效像素。
+  app.renderer.on?.('postrender', onLive2dPostRender)
 
   const startedAt = performance.now()
   try {
@@ -2598,6 +3163,8 @@ async function loadLive2DUrl(modelUrl) {
     app.stage.addChild(model)
     live2dModel = model
     attachMotionAndOutline(app, model)
+    // 立绘高度确定后，气泡的「立绘头顶」锚点才算得出来，立即刷新一次。
+    updateStageMetrics()
 
     // 状态栏、气泡的显隐会改变立绘区高度，Pixi 的内部画布不会自己跟上。
     // 不跟着 resize 的话，模型会按旧高度排版，被 CSS 纵向压扁。
@@ -2719,15 +3286,36 @@ if (window.pet?.onSettingsChanged) {
 }
 
 // 每日巡视小结与主动台词都由主进程推来；和台词共用同一条气泡出口。
+/* 推送去重：主进程的自主循环等不到回应时会把同一句再推一遍，
+   showBubble 里的旧去重只在气泡还亮着时拦，淡出后就放行，于是同一个提问连弹三次。
+   给推送台词加冷却期：期内相同内容（ack 键 + 文本）直接吞掉，状态栏留痕。 */
+const PUSH_REPEAT_COOLDOWN_MS = 10 * 60 * 1000
+let lastPushKey = null
+let lastPushAt = 0
+
 if (window.pet?.onBubble) {
   window.pet.onBubble((payload) => {
     if (typeof payload?.text === 'string' && payload.text !== '') {
       const ackSegment = payload.ackSegment
+      const pushKey = `${typeof ackSegment === 'string' ? ackSegment : ''}|${payload.text}`
+      if (pushKey === lastPushKey && Date.now() - lastPushAt < PUSH_REPEAT_COOLDOWN_MS) {
+        setMediaStatus(`重复台词已吞掉：${payload.text.slice(0, 24)}`)
+        return
+      }
+      lastPushKey = pushKey
+      lastPushAt = Date.now()
       showBubble(payload.text, ackSegment ? HOLD_ACK_MS : HOLD_NOTICE_MS, {
         speak: false,
         ackSegment,
         emojiId: payload.emojiId
       })
+      // 贴纸顺手换脸：有映射就盖一张临时表情，到期按墙钟回落（驱动方案）。
+      const emojiEmotion = emojiToEmotion(payload.emojiId)
+      if (emojiEmotion !== null) expressionOverlay?.setTemporary(emojiEmotion, 30000)
+      // 气泡只出字；要念就念提炼过的那句，原文念出来像在读文档。
+      if (typeof payload.speakText === 'string' && payload.speakText !== '') {
+        void speakVoice(payload.speakText, 'auto')
+      }
       // AI 自己挑了动作就播；播不出来也如实记账，不影响这句话正常显示。
       if (typeof payload.motion === 'string' && payload.motion !== '') playAiMotion(payload.motion)
     }
@@ -2771,6 +3359,738 @@ window.pet.onDecision((outcome) => {
 
 // 保留引用，避免被误判为未使用；模块健康由上面的 [modules] 行与设置窗诊断区读取。
 void pendingId
+
+// ---------- 与 DSH 插件联动：提问卡与审批卡 ----------
+// 插件把待处理项写进 live.json（ask.source === 'conversation' 或 approval），
+// 桌宠负责显示，并把选择写回 pet-command.json。两边只通过这两个文件对话。
+
+/**
+ * 把 theme.css 的语义 token 搬进 shadow，让卡片跟着主题换色。
+ *
+ * shadow 的 :host { all: initial } 会连 CSS 自定义属性一起重置，主题色因此进不来，
+ * 卡片只能吃 CSS 里写死的回退值 —— 表现就是主题选了天青、素纸，卡片依旧是粉的
+ * （和 theme.css 注释里记的「背景库还是粉的」同一个病）。
+ *
+ * 解法是把要用的 token 写到 host 的内联样式上：内联声明优先级高于 :host 规则，
+ * 变量于是重新沿继承链进入 shadow 内部。每次换主题后调一次即可。
+ */
+function syncThemeTokensToShadow() {
+  const tokens = [
+    '--accent', '--accent-deep', '--accent-soft', '--accent-soft-glass',
+    '--accent-glow', '--accent-line', '--accent-line-strong', '--accent-shadow',
+    '--surface', '--surface-soft', '--surface-solid', '--line', '--shadow',
+    '--ink', '--muted', '--white', '--danger', '--cy-warn',
+    '--bubble-border', '--bubble-tail-fill', '--bubble-shadow-color'
+  ]
+  const computed = getComputedStyle(document.documentElement)
+  for (const name of tokens) {
+    const value = computed.getPropertyValue(name).trim()
+    // 空值就不写，免得用一个空声明把继承来的值顶掉。
+    if (value !== '') modulesHost.style.setProperty(name, value)
+  }
+}
+
+/* 建好 shadow 就立刻同步一次，不等设置。
+   applyUiSettings 开头有 next 为 null 就直接 return 的守卫，getSettings 失败时
+   那条路走不到同步，卡片会因为 token 全空而连底色带文字一起失效。
+   这里的调用只依赖 theme.css 已经加载（data-theme 由 theme-boot.js 从 ?theme= 设好），
+   之后 applyUiSettings 再按设置纠正一次，重复调用是幂等的。 */
+syncThemeTokensToShadow()
+
+const pluginCardStyle = document.createElement('style')
+pluginCardStyle.textContent = `
+#plugin-card {
+  position: relative;
+  box-sizing: border-box;
+  width: min(252px, calc(100% - 4px));
+  /* 高度吃到头顶余量为止：卡片向上生长，超出窗口顶部就会被裁掉。 */
+  max-height: var(--bubble-headroom, calc(100vh - 96px));
+  overflow: auto;
+  margin: 0;
+  padding: 12px 14px 11px;
+  /* 圆角跟随气泡同一个 --bubble-radius，拉滑杆时气泡和卡片一起变圆润。
+     原先写死 18px，导致设置里的圆角只作用于气泡、卡片永远是方的。 */
+  border-radius: var(--bubble-radius, 18px);
+  /* 颜色一律取 theme.css 的语义 token，天青 / 樱粉 / 素纸三套主题自动跟随。
+     这里不写具体色值 —— theme.css 第 1 条规则就是这么要求的。 */
+  border: 1px solid var(--accent-line-strong);
+  /* 原先是 background-color: var(--bubble-bg)，但 --bubble-bg 在 theme.css 里是一段
+     linear-gradient，赋给 background-color 会让整条声明失效被丢弃，
+     卡片底色其实一直靠下面那层写死的粉白渐变撑着。改成 background 简写。 */
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--white) 90%, transparent),
+      color-mix(in srgb, var(--accent-soft) 78%, transparent)
+    ),
+    var(--surface-solid);
+  box-shadow:
+    0 12px 30px var(--accent-shadow),
+    0 2px 6px color-mix(in srgb, var(--accent-shadow) 60%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--white) 92%, transparent);
+  color: var(--ink);
+  font: 12.5px/1.62 "Microsoft YaHei", system-ui, sans-serif;
+  backdrop-filter: blur(10px) saturate(1.05);
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-line-strong) transparent;
+}
+#plugin-card[hidden] { display: none; }
+/* 卡片接管气泡：里面的台词让位，外层宽度改成卡片宽度，角角仍然朝下指着她。 */
+.pet-bubble-wrap[data-card="1"] {
+  width: min(252px, calc(100% - 16px));
+  max-width: calc(100% - 12px);
+}
+.pet-bubble-wrap[data-card="1"] > .pet-bubble { display: none; }
+#plugin-card .pc-head {
+  display: flex; align-items: center; gap: 7px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--accent-line);
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  color: var(--accent-deep);
+}
+#plugin-card .pc-head .pc-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+#plugin-card .pc-close {
+  margin-left: auto; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent;
+  color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .16s ease, color .16s ease;
+}
+#plugin-card .pc-close:hover { background: var(--accent-soft); color: var(--accent-deep); }
+#plugin-card .pc-reason { margin: 9px 0 2px; color: var(--muted); word-break: break-word; }
+#plugin-card .pc-q { margin-top: 11px; }
+/* 编号 + 问题：「01  今晚想先做哪件事？」 */
+#plugin-card .pc-q-text { display: flex; align-items: baseline; gap: 7px; margin-bottom: 6px; }
+#plugin-card .pc-q-index {
+  flex: none;
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+#plugin-card .pc-q-label { word-break: break-word; color: var(--ink); }
+/* 选项一行一个：横排胶囊在 252px 里挤成两三行，读起来乱。 */
+#plugin-card .pc-opts { display: flex; flex-direction: column; gap: 6px; }
+#plugin-card .pc-opt {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; box-sizing: border-box;
+  padding: 7px 11px; border-radius: 11px; cursor: pointer;
+  border: 1px solid var(--accent-line);
+  background: var(--surface);
+  color: var(--ink); font: inherit; font-size: 12px; text-align: left;
+  transition: background .16s ease, border-color .16s ease, transform .12s ease;
+}
+/* 单选圈：空心 → 选中实心。纯装饰，DOM 里挂了 aria-hidden。 */
+#plugin-card .pc-radio {
+  flex: none; width: 13px; height: 13px; box-sizing: border-box;
+  border: 1.5px solid var(--accent-line-strong);
+  border-radius: 50%; background: var(--white);
+  transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+/* 多选题画成方圈，一眼看出可以选好几个。 */
+#plugin-card .pc-q[data-multi="1"] .pc-radio { border-radius: 4px; }
+#plugin-card .pc-opt:hover { border-color: var(--accent-line-strong); background: var(--accent-soft); }
+#plugin-card .pc-opt:active { transform: scale(.985); }
+#plugin-card .pc-opt[data-on="1"] {
+  background: linear-gradient(180deg, var(--accent-soft), var(--accent-soft-glass));
+  border-color: var(--accent);
+  color: var(--accent-deep);
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--white) 80%, transparent);
+}
+#plugin-card .pc-opt[data-on="1"] .pc-radio {
+  background: var(--accent); border-color: var(--accent);
+  box-shadow: inset 0 0 0 2.5px var(--white);
+}
+/* 「或填写其他回答」：虚线框，和上面的实心选项分开看。 */
+#plugin-card .pc-free {
+  width: 100%; box-sizing: border-box;
+  margin-top: 6px; padding: 7px 11px;
+  border: 1px dashed var(--accent-line-strong);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+  color: var(--ink); font: inherit; font-size: 12px;
+  outline: none;
+  transition: border-color .16s ease, background .16s ease;
+}
+#plugin-card .pc-free::placeholder { color: var(--muted); }
+#plugin-card .pc-free:focus {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--white);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+#plugin-card .pc-actions { display: flex; gap: 8px; margin-top: 12px; }
+#plugin-card .pc-btn {
+  flex: 1; padding: 7px 10px; border-radius: 11px; cursor: pointer; font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--accent-line-strong);
+  background: var(--surface);
+  color: var(--accent-deep);
+  transition: background .16s ease, border-color .16s ease, transform .12s ease;
+}
+#plugin-card .pc-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+#plugin-card .pc-btn:active { transform: scale(.985); }
+#plugin-card .pc-btn.primary {
+  background: linear-gradient(180deg, var(--accent), var(--accent-deep));
+  border-color: var(--accent-deep);
+  color: var(--white);
+  font-weight: 600;
+  box-shadow:
+    0 4px 10px var(--accent-glow),
+    inset 0 1px 0 color-mix(in srgb, var(--white) 55%, transparent);
+}
+#plugin-card .pc-btn.primary:hover {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 78%, var(--white)),
+    var(--accent)
+  );
+}
+#plugin-card .pc-btn:disabled { opacity: .55; cursor: default; }
+#plugin-card .pc-hint {
+  margin-top: 9px; padding-top: 8px;
+  border-top: 1px solid var(--accent-line);
+  color: var(--muted); font-size: 11px;
+}
+#plugin-card .pc-todos { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+#plugin-card .pc-todo { display: flex; align-items: baseline; gap: 7px; padding: 2px 1px; }
+#plugin-card .pc-todo-mark { flex: none; width: 14px; text-align: center; color: var(--accent); font-size: 12px; }
+#plugin-card .pc-todo-text { word-break: break-word; color: var(--ink); }
+#plugin-card .pc-todo-completed .pc-todo-text { color: var(--muted); text-decoration: line-through; }
+#plugin-card .pc-todo-completed .pc-todo-mark { color: var(--muted); }
+/* 进行中用提醒色：theme.css 里 --cy-warn 就是留给「需要看一眼」的状态的。 */
+#plugin-card .pc-todo-in_progress .pc-todo-mark { color: var(--cy-warn); }
+#plugin-card .pc-todo-in_progress .pc-todo-text { color: var(--accent-deep); font-weight: 600; }
+`
+/* 必须挂进 shadow，不能挂 document.head：卡片住在 .pet-bubble-wrap 里，
+   而 wrap 是 shadow.querySelector('.pet-bubble') 那一棵树上的节点。
+   挂 head 的话样式作用域在 shadow 外面，整套粉色规则一条都套不上，
+   卡片会退化成浏览器默认样式——白底、灰边框按钮、黑字。 */
+shadow.append(pluginCardStyle)
+
+const pluginCard = document.createElement('div')
+pluginCard.id = 'plugin-card'
+pluginCard.hidden = true
+
+let pluginLiveCache = null
+let pluginCardKey = ''
+let pluginCardBusy = false
+let pluginCardOpen = false
+/* 游戏模式：插件在 live.game 里说「玩家在游戏里」，这边就把气泡闭上。
+   立绘透明度交给主进程调窗口，不在渲染层重复处理。 */
+let gameHideBubble = false
+/* 用户亲手收起的这一条：轮询还在，别刚收起又自己弹回来 */
+let pluginCardDismissed = ''
+let lastPluginLine = ''
+const pluginChoices = new Map()
+/** 每题那个虚线自由回答框，提交时并进 selected；重建卡片时一起清掉。 */
+const pluginFreeInputs = new Map()
+
+/* 卡片住在头顶那颗气泡里：气泡每次重建都把卡片重新挂一次，位置永远跟着它。 */
+function mountPluginCard() {
+  /* 只读的 bubbleWrapNode 在气泡还没被包过时会返回 null，卡片挂不进气泡，
+     就成了游离节点：样式作用域和 data-card 的宽度接管全都套不上，
+     表现为裸文本压在状态栏上。ensureBubbleWrap 幂等，没包过就当场包一层。 */
+  const wrap = ensureBubbleWrap(bubbleNode())
+  if (wrap === null) return null
+  if (pluginCard.parentElement !== wrap) wrap.append(pluginCard)
+  return wrap
+}
+
+/* 卡片常显：不排淡出计时器，交给「收起」或问题处理完来关。 */
+function openPluginCard() {
+  const wrap = mountPluginCard()
+  if (wrap === null) return false
+  pluginCardOpen = true
+  wrap.dataset.card = '1'
+  pluginCard.hidden = false
+  if (bubbleHideTimer !== null) {
+    clearTimeout(bubbleHideTimer)
+    bubbleHideTimer = null
+  }
+  setBubbleShown(true)
+  return true
+}
+
+function closePluginCard({ hideBubble = true, dismiss = false } = {}) {
+  if (dismiss) pluginCardDismissed = pluginCardKey
+  pluginCardOpen = false
+  pluginCard.hidden = true
+  pluginCard.replaceChildren()
+  const wrap = bubbleWrapNode()
+  if (wrap !== null) delete wrap.dataset.card
+  /* 走 hideBubbleNow 而不是裸 setBubbleShown(false)：后者只改 class，
+     bubbleHideTimer 还在跑，于是「正在说话」的判定（bubbleHideTimer !== null）
+     和眼睛看到的空气泡对不上，2 秒轮播也会被 !speaking 一直挡着。
+     顺带把 lastBubbleText 清掉，下一句哪怕是同一句也能正常重新弹出。 */
+  if (hideBubble) {
+    hideBubbleNow()
+    lastBubbleText = ''
+  }
+}
+
+
+function pluginPendingKey(live) {
+  const approval = live?.approval ? `a${live.approval.id}` : ''
+  const ask = live?.ask ? `q${live.ask.id ?? ''}` : ''
+  return `${approval}|${ask}`
+}
+
+async function readPluginLive() {
+  if (typeof window.pet?.pluginLive !== 'function') return null
+  try {
+    return await window.pet.pluginLive()
+  } catch {
+    return null
+  }
+}
+
+async function sendPluginCommand(command) {
+  if (typeof window.pet?.pluginCommand !== 'function') return false
+  try {
+    await window.pet.pluginCommand(command)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/* 插件侧的台词：只有内容真的变了才打扰，避免每次轮询都把气泡顶开 */
+/* 游戏模式开关：每次读到 live 都算一遍，从开到关要能自己恢复。 */
+function applyGameMode(game) {
+  const next = game !== null && typeof game === 'object' ? game : null
+  const on = next?.active === true && next?.hideBubble === true
+  if (on === gameHideBubble) return
+  gameHideBubble = on
+  if (!on) return
+  // 刚进游戏模式：已经浮着的气泡和待办卡一起收掉，别挡画面。
+  if (pluginCardOpen) closePluginCard({ hideBubble: true })
+  hideBubbleNow()
+}
+
+function applyPluginLine(live) {
+  applyGameMode(live?.game)
+  const line = typeof live?.line === 'string' ? live.line.trim() : ''
+  if (line === '' || line === lastPluginLine) return
+  lastPluginLine = line
+  showBubble(line, HOLD_SPEAK_MS, { speak: false })
+}
+
+function renderPluginCard(live) {
+  const approval = live?.approval ?? null
+  const rawAsk = live?.ask ?? null
+  const ask = rawAsk !== null && (rawAsk.source === 'conversation' || typeof rawAsk.text === 'string') ? rawAsk : null
+  const key = pluginPendingKey(live)
+
+  if (approval === null && ask === null) {
+    pluginCardKey = ''
+    pluginCardDismissed = ''
+    /* 只有卡片真的开着才收。轮询每 1.2 秒跑一次，绝大多数时候这里根本没有
+       待办；此前无条件 closePluginCard() 会连带 hideBubble 一起把普通台词气泡
+       掐掉，气泡最长只能活 1.2 秒 —— 停留时长滑块怎么调都看不出效果。
+       收卡片和收台词是两件事，不该互相牵连。 */
+    if (pluginCardOpen) closePluginCard({ hideBubble: true })
+    return
+  }
+
+  /* 这一条被亲手收起了就安静等着，换成新内容才重新浮出来。 */
+  if (key === pluginCardDismissed) return
+
+  // 内容没变就不重建，否则按钮会在轮询里被拆掉，点下去等于没点。
+  if (key === pluginCardKey && pluginCardBusy === false) return
+  pluginCardKey = key
+  pluginChoices.clear()
+  pluginFreeInputs.clear()
+  pluginCard.replaceChildren()
+  /* 挂进气泡再打开：内容一到就自己浮在头顶，不用等长按。 */
+  openPluginCard()
+
+  const head = document.createElement('div')
+  head.className = 'pc-head'
+  const dot = document.createElement('span')
+  dot.className = 'pc-dot'
+  head.append(dot, document.createTextNode(approval !== null ? '她想动一下手' : '她在等你一句话'))
+  const collapse = document.createElement('button')
+  collapse.className = 'pc-close'
+  collapse.type = 'button'
+  collapse.textContent = '收起'
+  collapse.addEventListener('click', () => closePluginCard({ dismiss: true }))
+  head.append(collapse)
+  pluginCard.append(head)
+
+  if (approval !== null) {
+    const reason = document.createElement('div')
+    reason.className = 'pc-reason'
+    reason.textContent = `工具：${approval.tool || '未知'}${approval.reason ? ` · ${approval.reason}` : ''}`
+    pluginCard.append(reason)
+
+    const actions = document.createElement('div')
+    actions.className = 'pc-actions'
+    const allow = document.createElement('button')
+    allow.className = 'pc-btn primary'
+    allow.type = 'button'
+    allow.textContent = '准了'
+    const deny = document.createElement('button')
+    deny.className = 'pc-btn'
+    deny.type = 'button'
+    deny.textContent = '先别'
+
+    const settle = async (decision, note) => {
+      if (pluginCardBusy) return
+      pluginCardBusy = true
+      allow.disabled = true
+      deny.disabled = true
+      const ok = await sendPluginCommand({ action: 'approval', approvalId: approval.id, decision })
+      pluginCardBusy = false
+      if (ok) {
+        pluginCardKey = ''
+        closePluginCard({ hideBubble: false })
+        notifyBeta(note)
+      } else {
+        allow.disabled = false
+        deny.disabled = false
+        notifyBeta('没送到插件那边，再试一次吧')
+      }
+    }
+
+    allow.addEventListener('click', () => void settle('allowed-once', '好，这次准了♪'))
+    deny.addEventListener('click', () => void settle('rejected', '嗯，先不做啦'))
+
+    actions.append(deny, allow)
+    pluginCard.append(actions)
+  }
+
+  if (ask !== null) {
+    // 对话提问是多题数组；主动提问是单题结构，归一化成单题数组复用渲染。
+    const isConversation = Array.isArray(ask.questions)
+    const questions = isConversation
+      ? ask.questions
+      : [
+          {
+            id: ask.id ?? 0,
+            index: typeof ask.index === 'number' ? ask.index : -1,
+            text: ask.text ?? '',
+            choices: Array.isArray(ask.choices) ? ask.choices : [],
+            multi: false,
+          },
+        ]
+    questions.forEach((question, index) => {
+      const block = document.createElement('div')
+      block.className = 'pc-q'
+      const multi = question.multi === true
+      if (multi) block.dataset.multi = '1'
+
+      const text = document.createElement('div')
+      text.className = 'pc-q-text'
+      /* 编号单独一个 span：两位数好对齐，也不会跟着问题文字一起换行。 */
+      const num = document.createElement('span')
+      num.className = 'pc-q-index'
+      num.textContent = String(index + 1).padStart(2, '0')
+      const label = document.createElement('span')
+      label.className = 'pc-q-label'
+      label.textContent = question.text ?? ''
+      text.append(num, label)
+
+      const opts = document.createElement('div')
+      opts.className = 'pc-opts'
+      const choices = Array.isArray(question.choices) ? question.choices : []
+      const picked = new Set()
+      pluginChoices.set(index, picked)
+
+      choices.forEach((choice) => {
+        const button = document.createElement('button')
+        button.className = 'pc-opt'
+        button.type = 'button'
+        /* 选中态原先靠 other.textContent 比对，按钮里多了单选圈这个子节点之后
+           文本拼接就不再可靠，所以把原值存进 dataset.value，比对只看它。 */
+        button.dataset.value = choice
+        button.dataset.on = '0'
+        const radio = document.createElement('span')
+        radio.className = 'pc-radio'
+        radio.setAttribute('aria-hidden', 'true')
+        button.append(radio, document.createTextNode(choice))
+        button.addEventListener('click', () => {
+          if (multi) {
+            if (picked.has(choice)) picked.delete(choice)
+            else picked.add(choice)
+          } else {
+            picked.clear()
+            picked.add(choice)
+          }
+          /* 只遍历选项按钮：自由回答框也在这一题的块里，别把 data-on 糊到它身上。 */
+          for (const other of opts.querySelectorAll('.pc-opt')) {
+            other.dataset.on = picked.has(other.dataset.value) ? '1' : '0'
+          }
+        })
+        opts.append(button)
+      })
+
+      block.append(text, opts)
+
+      /* 自由回答：选项里没有想要的那个就直接写。提交时并进 selected。 */
+      const free = document.createElement('input')
+      free.className = 'pc-free'
+      free.type = 'text'
+      free.placeholder = '或填写其他回答…'
+      free.maxLength = 200
+      pluginFreeInputs.set(index, free)
+      block.append(free)
+
+      pluginCard.append(block)
+    })
+
+    const actions = document.createElement('div')
+    actions.className = 'pc-actions'
+    const submit = document.createElement('button')
+    submit.className = 'pc-btn primary'
+    submit.type = 'button'
+    submit.textContent = '交给人家'
+    submit.addEventListener('click', async () => {
+      if (pluginCardBusy) return
+      pluginCardBusy = true
+      submit.disabled = true
+      let ok = false
+      if (isConversation) {
+        const answers = questions.map((question, index) => {
+          const selected = [...(pluginChoices.get(index) ?? new Set())]
+          const extra = pluginFreeInputs.get(index)?.value?.trim() ?? ''
+          if (extra !== '') selected.push(extra)
+          return {
+            // id 是插件侧对齐答案的主键（buildAnswerBatch 按 String(item.id) 建索引），
+            // 只交 index 会让索引键全变成 "undefined"，逐题答案落空、DSH 那边显示「已跳过」。
+            id: question.id,
+            index: Number.isFinite(question.index) ? question.index : index,
+            selected,
+          }
+        })
+        ok = await sendPluginCommand({ action: 'answer', askId: ask.id, answers })
+      } else {
+        const selected = [...(pluginChoices.get(0) ?? new Set())]
+        const extra = pluginFreeInputs.get(0)?.value?.trim() ?? ''
+        if (extra !== '') selected.push(extra)
+        ok = await sendPluginCommand({ action: 'answer', question: ask.text, answer: selected.join('、') })
+      }
+      pluginCardBusy = false
+      if (ok) {
+        pluginCardKey = ''
+        closePluginCard({ hideBubble: false })
+        notifyBeta('记下了，谢谢你告诉人家♪')
+      } else {
+        submit.disabled = false
+        notifyBeta('答案没送到插件那边，再试一次吧')
+      }
+    })
+    actions.append(submit)
+    pluginCard.append(actions)
+  }
+
+  const hint = document.createElement('div')
+  hint.className = 'pc-hint'
+  hint.textContent = '长按她可以再叫出这张卡'
+  pluginCard.append(hint)
+}
+
+async function pollPluginLive() {
+  const live = await readPluginLive()
+  if (live === null) return
+  pluginLiveCache = live
+  applyPluginLine(live)
+  renderPluginCard(live)
+}
+
+/* 长按：把卡叫出来；没有待办时也给一句明确的回应 */
+/* 长按没有待办时，把任务卡叫出来：只读列表，不替她改任何东西。 */
+function renderTodoCard(todos) {
+  const list = Array.isArray(todos) ? todos : []
+  if (list.length === 0) return false
+  pluginChoices.clear()
+  pluginFreeInputs.clear()
+  pluginCard.replaceChildren()
+  openPluginCard()
+
+  const head = document.createElement('div')
+  head.className = 'pc-head'
+  const dot = document.createElement('span')
+  dot.className = 'pc-dot'
+  head.append(dot, document.createTextNode('今天的任务'))
+  const collapse = document.createElement('button')
+  collapse.className = 'pc-close'
+  collapse.type = 'button'
+  collapse.textContent = '收起'
+  collapse.addEventListener('click', () => closePluginCard())
+  head.append(collapse)
+  pluginCard.append(head)
+
+  const box = document.createElement('div')
+  box.className = 'pc-todos'
+  for (const item of list) {
+    const status = item?.status === 'completed' || item?.status === 'in_progress' ? item.status : 'pending'
+    const row = document.createElement('div')
+    row.className = `pc-todo pc-todo-${status}`
+    const mark = document.createElement('span')
+    mark.className = 'pc-todo-mark'
+    mark.textContent = status === 'completed' ? '✓' : status === 'in_progress' ? '▶' : '○'
+    const text = document.createElement('span')
+    text.className = 'pc-todo-text'
+    text.textContent = item?.content ?? ''
+    row.append(mark, text)
+    box.append(row)
+  }
+  pluginCard.append(box)
+
+  const hint = document.createElement('div')
+  hint.className = 'pc-hint'
+  hint.textContent = '长按她可以再叫出这张卡'
+  pluginCard.append(hint)
+  return true
+}
+
+function showPluginCard() {
+  if (pluginLiveCache !== null) renderPluginCard(pluginLiveCache)
+  if (pluginCardOpen) return
+  const todos = pluginLiveCache?.todos
+  if (Array.isArray(todos) && todos.length > 0) {
+    renderTodoCard(todos)
+    return
+  }
+  showBubble('现在没有等你拍板的事♪', HOLD_NOTICE_MS, { speak: false })
+}
+
+// ---------- 手势：单击换台词、双击看余额、三击刷新、长按看任务卡 ----------
+// 原 pointerdown 里的命中判定与反馈动作都不动，这里只读 pressedOnPet 做补充。
+
+/* 单击的可见反馈：素材只有 idle、没有 tap 动作，用 #stage-area 的
+   CSS 弹跳代替。先摘 class 再强制回流，连续快点时动画也能从头重放。 */
+function playTapBounce() {
+  const area = document.getElementById('stage-area')
+  if (area === null) return
+  area.classList.remove('tap-bounce')
+  void area.offsetWidth
+  area.classList.add('tap-bounce')
+}
+
+let tapCount = 0
+let tapTimer = null
+let pressTimer = null
+let pressFired = false
+/* 点击世代：每次 pointerup 加一。refreshLine 异步等待期间靠它对账，
+   发现世代变了就说明用户又点了，旧台词直接作废。 */
+let tapGeneration = 0
+
+canvas.addEventListener('pointerdown', () => {
+  pressFired = false
+  /* 命中判定在前一个 pointerdown 监听器里做完，pressedOnPet 就是这一次的结果。
+     点在透明区时既不弹跳也不排长按：立绘弹了一下却什么都不发生，
+     比完全没有反馈更容易让人觉得「手势乱了」。 */
+  if (!pressedOnPet) {
+    if (pressTimer !== null) clearTimeout(pressTimer)
+    pressTimer = null
+    return
+  }
+  /* 按下瞬间就给反馈，不等 420ms 后判明是单击还是双击——弹跳是纯视觉
+     反馈不带动作语义，每一下都弹才不会让人觉得「点了没反应」。 */
+  playTapBounce()
+  if (pressTimer !== null) clearTimeout(pressTimer)
+  pressTimer = setTimeout(() => {
+    pressFired = true
+    tapCount = 0
+    if (tapTimer !== null) clearTimeout(tapTimer)
+    showPluginCard()
+  }, 620)
+})
+
+canvas.addEventListener('pointerup', (event) => {
+  if (pressTimer !== null) clearTimeout(pressTimer)
+  if (pressFired) {
+    pressFired = false
+    return
+  }
+  if (!pressedOnPet || event.button !== 0) return
+  tapCount += 1
+  tapGeneration += 1
+  const generation = tapGeneration
+  if (tapTimer !== null) clearTimeout(tapTimer)
+
+  /* 单击立即响应：不等 520ms 合并窗口就让她说话，消除「点了没反应」的
+     迟钝感。双击/三击靠 tapGeneration 对账在窗口内覆盖——晚到的旧台词
+     发现世代变了就作废，余额/刷新把前面那句顶掉。 */
+  if (tapCount === 1) {
+    if (!hasModel) {
+      console.warn('[click] 已命中但模型不在场，台词没有触发')
+    } else {
+      lastSpeakAt = Date.now()
+      pulsePetScale()
+      // 默认图片模式才有姿势池：先换一张，再让她说话。Live2D / GIF 不受影响。
+      void cycleBundledLook()
+      void refreshLine(generation)
+    }
+  }
+
+  /* 合并窗口盖过系统双击阈值（Windows 默认 500ms）：窗口内数到 2 是双击
+     （弹余额）、数到 3 是三击（气泡反馈 + 刷新）；超过窗口的下一下重新
+     从单击算起。 */
+  tapTimer = setTimeout(() => {
+    const count = tapCount
+    tapCount = 0
+    if (count === 2) {
+      showBalanceLine()
+    } else if (count >= 3) {
+      // 三击给个可见反馈再刷新，别默默 reload 让人觉得没反应。
+      showBubble('好，这就重新加载一下♪', HOLD_NOTICE_MS, { speak: false })
+      setTimeout(() => location.reload(), 420)
+    }
+  }, 520)
+})
+
+canvas.addEventListener('pointercancel', () => {
+  if (pressTimer !== null) clearTimeout(pressTimer)
+  pressFired = false
+})
+
+/* 双击不再单独监听 dblclick：纯计数机制自己就是权威——tapCount 在
+   520ms 窗口内数到 2 就是双击（弹余额）、数到 3 就是三击（刷新）。
+   另挂 dblclick 会把第二下之后 tapCount 清零，三击永远凑不满，还会
+   和 tapTimer 的 count === 2 分支各弹一次余额。 */
+
+async function refreshLine(generation) {
+  try {
+    const result = await window.pet?.speak?.('manual')
+    if (typeof result?.line === 'string' && result.line !== '') {
+      /* 等待 IPC 期间用户又点了：这条旧台词作废。晚到还弹的话，
+         会和新点击要弹的气泡顶在一起，两颗互相打断，谁都停不满一秒。 */
+      if (generation !== tapGeneration) return
+      showBubble(result.line, HOLD_SPEAK_MS, { reason: 'manual' })
+      return
+    }
+  } catch {
+    // 主进程没接上，往下走本地台词
+  }
+  const live = pluginLiveCache ?? (await readPluginLive())
+  if (generation !== tapGeneration) return
+  if (typeof live?.line === 'string' && live.line !== '') {
+    showBubble(live.line, HOLD_SPEAK_MS, { speak: false })
+    return
+  }
+  if (typeof nextSpeakLine === 'function') showBubble(nextSpeakLine(), HOLD_SPEAK_MS, { speak: false })
+}
+
+function showBalanceLine() {
+  if (balanceText === '—') {
+    showBubble('还没读到余额呢，稍等一会儿再试试♪', HOLD_NOTICE_MS, { speak: false })
+    return
+  }
+  const suffix = typeof todayText === 'string' && todayText !== '—' ? ` · 今天 ${todayText}` : ''
+  showBubble(`余额 ${balanceText}${suffix}`, HOLD_SPEAK_MS, { speak: false })
+}
+
+void pollPluginLive()
+setInterval(() => void pollPluginLive(), 1200)
+
+
 
 // ---------- 开发自检：不弹文件框，直接走同一条四媒体加载路径 ----------
 
@@ -2871,3 +4191,93 @@ window.__petSelfTest = async () => {
   results.status = lastStatus
   return results
 }
+
+// ---- 像素级穿透（A2）----
+// 窗口以「穿透 + forward」为基线：鼠标移到立绘 / 气泡 / 状态条 / 空态卡等可交互元素上时
+// 切回「可点」，移到透明区再切回穿透。forward 保证穿透时 mousemove 仍能进来做判断，
+// 否则一旦穿透就再也收不到下一次移动、切不回来。
+let lastPixelHit = null
+
+/**
+ * 不依赖鼠标移动的命中重算。
+ *
+ * 气泡自动出现/淡出、「知道了」按钮、HUD 展开收起、空态卡切换都会改 DOM，
+ * 鼠标不动时 lastPixelHit 还是旧值，窗口可能一直停在错误的穿透状态。
+ * 各更新点在 DOM 落定后调用它；这里统一放到下一帧再算，
+ * 保证量到的是更新之后的 elementFromPoint 结果。
+ */
+function recomputeHit() {
+  requestAnimationFrame(() => {
+    const last = lastPointerClient
+    if (last === null) return
+    const hit = pixelHitAt(last.x, last.y)
+    if (hit === lastPixelHit) return
+    lastPixelHit = hit
+    void window.pet?.setPixelHit?.(hit)
+  })
+}
+
+// 命中判断：交给 elementFromPoint —— 它天然服从 pointer-events 与显隐状态，
+// 命中到的就是「此刻真正可点」的元素。
+// 旧版按各容器的 bounding rect 判定：气泡收起时只是 opacity 0，wrap 常驻 DOM
+// 且 rect 恰好盖住立绘头顶整块，头顶于是永远判「命中」，窗口永远不穿透。
+function pixelHitAt(clientX, clientY) {
+  const el = document.elementFromPoint(clientX, clientY)
+  if (el === null) return false
+
+  // 头顶透明余量（#headroom 占位段）：命中它等于命中透明区，任何时候都穿透。
+  // 这一段必须是 no-drag：拖拽区会吞掉 pointer 事件，指针从气泡移进这段时
+  // mousemove 收不到，窗口会卡在「可点」状态，头顶的透明区域就点不过去了。
+  if (el.id === 'headroom') return false
+
+  // shadow DOM 里的交互内容（气泡、「知道了」、提问卡）：收起时 wrap 是
+  // pointer-events:none 命中不到；展开后才会命中，并 retarget 到宿主节点 #modules。
+  if (el === modulesHost) {
+    // retarget 只说明命中了阴影树里的某个可点节点，不说明点到了内容：
+    // 再用 shadow 内的真实命中筛一次，只有气泡卡 / 「知道了」 / 提问卡才算可点，
+    // wrap 边缘与其它透明像素照常穿透。
+    const inner = shadow.elementFromPoint(clientX, clientY)
+    if (inner === null) return false
+    return inner.closest('.pet-bubble, .pet-bubble-ack, #plugin-card') !== null
+  }
+
+  // 空态卡 / 状态条 / 横幅：隐藏时要么 display:none 要么 pointer-events:none，
+  // elementFromPoint 不会返回它们，能命中就说明正可见。
+  if (el.closest('#empty-state, #hud, #banner') !== null) return true
+
+  // 原生交互控件兜底（将来 light DOM 里再有别的浮层也能点）。
+  if (el.closest('button, input, select, textarea, label, a') !== null) return true
+  if (el.tagName === 'VIDEO') return true
+
+  // 2D 静态画布：像素级 alpha 判定（复用点击链路同一套 isOpaqueHit），
+  // canvas rect 内的透明像素照样穿透。
+  if (el === canvas) {
+    const box = canvas.getBoundingClientRect()
+    const point = toCanvasPoint(
+      { x: clientX - box.left, y: clientY - box.top },
+      { x: box.width / canvas.width, y: box.height / canvas.height }
+    )
+    return isOpaqueHit(canvas, point)
+  }
+
+  // Live2D 分支：app.view 是 pointer-events:none，elementFromPoint 不会返回它，
+  // 指针落在她身上时拿到的是下层的 #stage-area。这里不再借 elementFromPoint，
+  // 直接按窗口坐标走「包围盒粗判 + alpha 快照细判」；命中域之外一律穿透，
+  // 不再整窗矩形。
+  if (live2dApp !== null && live2dModel !== null) {
+    return live2dHitAt(clientX, clientY)
+  }
+
+  return false
+}
+
+window.addEventListener('mousemove', (event) => {
+  lastPointerClient = { x: event.clientX, y: event.clientY }
+  const hit = pixelHitAt(event.clientX, event.clientY)
+  if (hit === lastPixelHit) return
+  lastPixelHit = hit
+  void window.pet?.setPixelHit?.(hit)
+})
+
+// 初始基线：加载完先把窗口切成「穿透 + forward」，后续由 mousemove 驱动切换。
+void window.pet?.setPixelHit?.(false)

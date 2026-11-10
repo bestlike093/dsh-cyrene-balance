@@ -22,13 +22,18 @@ if (process.env.NODE_ENV === 'test') {
 }
 export function registerVoiceChannels(deps) {
     const register = deps.registerChannel;
+    /** 合成路径的硬超时：本地 TTS 服务卡死时强制解锁，不让后面所有请求永远 busy。 */
+    const SYNTHESIZE_TIMEOUT_MS = 60_000;
     register('pet:voice:speak', async (event, payload) => {
         const sender = event?.sender;
+        // destroyed 只挂一次：每次请求重复注册会把监听器数量刷爆。
         if (sender !== null && typeof sender === 'object' && typeof sender.id === 'number') {
-            subscriptions.add(sender.id, noop);
-            sender.once?.('destroyed', () => {
-                subscriptions.dispose(sender.id);
-            });
+            if (!subscriptions.has(sender.id)) {
+                subscriptions.add(sender.id, noop);
+                sender.once?.('destroyed', () => {
+                    subscriptions.dispose(sender.id);
+                });
+            }
         }
         if (speakInFlight)
             return { ok: false, reason: 'busy' };
@@ -46,15 +51,35 @@ export function registerVoiceChannels(deps) {
             });
             if (!plan.ok)
                 return { ok: false, reason: plan.reason };
-            if (plan.autoSpeakAt !== null)
-                lastAutoSpeakAt = plan.autoSpeakAt;
             const provider = deps.createLocalTtsProvider({
                 baseUrl: plan.endpoint,
                 protocol: plan.protocol,
                 refAudioPath: plan.refAudioPath,
-                promptLang: plan.promptLang
+                promptLang: plan.promptLang,
+                promptText: plan.promptText ?? ''
             });
-            const result = await provider.synthesize({ text: plan.text });
+            // 合成成功才推进节流：失败不占 minIntervalSeconds 窗口，
+            // 下一次自动台词不会因为「上一次没响出来」被挡掉。
+            let result;
+            const timed = new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    reject(Object.assign(new Error('tts synthesize timeout'), { code: 'tts-timeout' }));
+                }, SYNTHESIZE_TIMEOUT_MS);
+                timer.unref?.();
+                provider.synthesize({ text: plan.text }).then(
+                    (value) => {
+                        clearTimeout(timer);
+                        resolve(value);
+                    },
+                    (error) => {
+                        clearTimeout(timer);
+                        reject(error);
+                    }
+                );
+            });
+            result = await timed;
+            if (plan.autoSpeakAt !== null)
+                lastAutoSpeakAt = plan.autoSpeakAt;
             return { ok: true, format: result.format, audio: result.audio };
         }
         catch (error) {

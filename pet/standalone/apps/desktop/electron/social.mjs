@@ -32,9 +32,9 @@ const QUOTE_PATTERN = /(我朋友|我同学|我同事|我室友|他说|她说|�
 /** 未兑现的打算：可以记成「想做」，不能记成「已经在做」。 */
 const PLAN_PATTERN = /(打算|准备|计划|想着|可能会|也许会|以后要|将来要)/
 
-/** 凭据类内容一律不落记忆。 */
+/** 凭据类内容一律不落记忆。「手机号」三个字本身不算凭据，只拦具体号码形态（11 位手机号等）。 */
 const SECRET_PATTERN =
-  /(密码|口令|验证码|密钥|token|api[_-]?key|sk-[A-Za-z0-9_-]{8,}|身份证|银行卡|手机号)/i
+  /(密码|口令|验证码|密钥|token|api[_-]?key|sk-[A-Za-z0-9_-]{8,}|身份证|银行卡|1[3-9]\d{9})/i
 
 /** 明确要求记住。 */
 const EXPLICIT_REMEMBER_PATTERN = /(记住|记一下|别忘|不要忘|帮我记|以后记得)/
@@ -106,12 +106,13 @@ export function normalizeText(text) {
  * 支持「昔涟」「@昔涟」「昔涟，在吗」三种写法；命中后把唤醒词和紧跟的标点剥掉，
  * 剩下的才是要给模型看的正文。不在开头也算命中，但会标 atStart=false，
  * 方便上层决定「群里被点名」还是「聊天里顺口提到」。
+ * text 是规范化后的正文，rawText 保留未规范化的原文，供需要原样的调用方使用。
  */
 export function matchWake(text, options = {}) {
   const source = asText(text)
   const words = Array.isArray(options.words) && options.words.length > 0 ? options.words : DEFAULT_WAKE_WORDS
   const plain = normalizeText(source)
-  if (plain === '') return { woken: false, word: '', text: source, atStart: false }
+  if (plain === '') return { woken: false, word: '', text: source, rawText: source, atStart: false }
 
   let best = null
   for (const raw of words) {
@@ -123,7 +124,7 @@ export function matchWake(text, options = {}) {
       best = { index, word }
     }
   }
-  if (best === null) return { woken: false, word: '', text: source, atStart: false }
+  if (best === null) return { woken: false, word: '', text: source, rawText: source, atStart: false }
 
   const before = plain.slice(0, best.index)
   const after = plain.slice(best.index + best.word.length)
@@ -136,6 +137,8 @@ export function matchWake(text, options = {}) {
     woken: true,
     word: best.word,
     text: stripped,
+    // MEM-197：text 是规范化后的正文，这里另给一份未做全角转换的原文。
+    rawText: source,
     atStart: best.index === 0 || /^@\s*$/.test(before)
   }
 }
@@ -248,6 +251,16 @@ function analyzeBurst(messages) {
   }
 }
 
+/** at 可能是毫秒数，也可能是 ISO 字符串；Number('2026-01-01…') 会变成 NaN，统一用 Date.parse 兜底。 */
+function toTimestamp(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Date.parse(value)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return Number.NaN
+}
+
 /**
  * 接话间隔：只看 15 分钟以内的相邻消息。
  * 隔了半天再说话是「又开了一个话题」，不是「接话慢」。
@@ -255,8 +268,8 @@ function analyzeBurst(messages) {
 function averageGapSeconds(messages) {
   const gaps = []
   for (let index = 1; index < messages.length; index += 1) {
-    const prev = Number(messages[index - 1]?.at)
-    const next = Number(messages[index]?.at)
+    const prev = toTimestamp(messages[index - 1]?.at)
+    const next = toTimestamp(messages[index]?.at)
     if (!Number.isFinite(prev) || !Number.isFinite(next)) continue
     const seconds = (next - prev) / 1000
     if (seconds >= 0 && seconds <= 900) gaps.push(seconds)
@@ -327,7 +340,9 @@ function isStopPhrase(phrase) {
 /** 把统计结果写成一句人话，给模型看。 */
 export function describeStyle(stats) {
   if (!stats || stats.sampleSize < 5) return ''
-  const parts = [`这群人说话平均 ${stats.avgLength} 个字`]
+  const parts = []
+  // 旧版本落盘的画像可能缺 avgLength 等字段，缺了就跳过这一句，而不是输出 undefined。
+  if (Number.isFinite(stats.avgLength)) parts.push(`这群人说话平均 ${stats.avgLength} 个字`)
   if (stats.shortRatio >= 0.5) parts.push('短句居多')
   if (stats.punctuationRatio <= 0.3) parts.push('经常不打句号')
   if (stats.emojiRatio >= 0.25) parts.push('爱用 emoji')
@@ -346,7 +361,10 @@ export function describeStyle(stats) {
   if (Array.isArray(stats.openers) && stats.openers.length > 0) edges.push(`常用开头「${stats.openers.join('」「')}」`)
   if (Array.isArray(stats.closers) && stats.closers.length > 0) edges.push(`常用结尾「${stats.closers.join('」「')}」`)
   const edgeText = edges.length > 0 ? `；${edges.join('，')}` : ''
-  return `${detail}${particles}${phrases}${edgeText}。`
+  const extra = `${particles}${phrases}${edgeText}`
+  // 主句可能全被跳过（字段缺失），别在开头留一个孤零零的「；」。
+  if (detail === '') return extra === '' ? '' : `${extra.replace(/^；/, '')}。`
+  return `${detail}${extra}。`
 }
 
 /**
@@ -378,8 +396,11 @@ export function describeFormatAdvice(stats) {
  * 一个人反复说同一句，更可能是口头禅；两个以上的人都在用，才像群里的梗。
  */
 export function extractMemeCandidates(messages, options = {}) {
-  const minCount = Number.isFinite(options.minCount) ? options.minCount : 3
-  const minSpeakers = Number.isFinite(options.minSpeakers) ? options.minSpeakers : 2
+  // minCount/minSpeakers 至少为 1，0 或负数等于没门槛；limit 取整并夹到 >=1，
+  // 负数会让 slice(0, -1) 几乎全量返回。
+  const minCount = Math.max(1, Number.isFinite(options.minCount) ? options.minCount : 3)
+  const minSpeakers = Math.max(1, Number.isFinite(options.minSpeakers) ? options.minSpeakers : 2)
+  const limit = Math.max(1, Math.floor(Number.isFinite(options.limit) ? options.limit : 5))
   const list = Array.isArray(messages) ? messages.filter((item) => item && typeof item.text === 'string') : []
 
   const buckets = new Map()
@@ -406,7 +427,7 @@ export function extractMemeCandidates(messages, options = {}) {
     .filter((item) => !isStopPhrase(item.phrase))
     .filter((item) => prefixFree(item.phrase, new Map([...buckets].map(([key, value]) => [key, value.count]))))
     .sort((a, b) => b.speakers.size - a.speakers.size || b.count - a.count)
-    .slice(0, Number.isFinite(options.limit) ? options.limit : 5)
+    .slice(0, limit)
     .map((item) => ({
       phrase: item.phrase,
       count: item.count,
@@ -443,15 +464,20 @@ export function detectLanguagePlay(text) {
  * 只认明确指向上一轮或明确纠错的说法，避免把「我不是学生，是老师」这种自我介绍
  * 当成对 AI 的纠正。命中后写成一条 lesson，下一轮提示词会提醒不要重犯。
  */
+// MEM-360：「应该是」这类推测不算纠正，只有主语是「你」的「你应该/不该…」才算。
 const CORRECTION_PATTERN =
-  /(你(?:刚才|刚刚)?说错|不对(?:吧)?[，,。！!]|说错了|记错了|搞错了|不是这个意思|别这么说|别这样说|不要这样说|下次(?:要|别|不要)|以后(?:要|别|不要)|应该(?:是|说|叫)|你(?:刚才|刚刚)?(?:不是|说))/
-const CORRECTION_QUIZ = /(是不是|对不对|好不好|行不行)[^。！!]*[？?]\s*$/
+  /(你(?:刚才|刚刚)?说错|不对(?:吧)?[，,。！!]|说错了|记错了|搞错了|不是这个意思|别这么说|别这样说|不要这样说|下次(?:要|别|不要)|以后(?:要|别|不要)|你(?:不应该|不该|应该|该)(?:是|说|叫)|你(?:刚才|刚刚)?(?:不是|说))/
+/** 确认式提问：句尾落在「是不是/对不对/好不好/行不行」，且前面有「你」「我」这类指向。 */
+const CORRECTION_QUIZ = /(你|我)[^。！!？?]{0,20}(是不是|对不对|好不好|行不行)[？?]?\s*$/
+/** 句尾带「吗」的反问不是纠错：「你不是很喜欢吗」是在反问，不是指出错误。 */
+const RHETORICAL_QUESTION = /吗[？?]?\s*$/
 
 export function detectCorrection(text) {
   const source = asText(text).trim().replace(/\s+/g, ' ')
   if (source === '') return { corrected: false }
   const chars = Array.from(source).length
   if (chars < 4 || chars > 120) return { corrected: false }
+  if (RHETORICAL_QUESTION.test(source)) return { corrected: false }
   if (CORRECTION_QUIZ.test(source)) return { corrected: false }
   if (!CORRECTION_PATTERN.test(source)) return { corrected: false }
 
@@ -492,11 +518,13 @@ export function classifyMemory(text, options = {}) {
   if (JOKE_PATTERN.test(source)) return reject('joke')
   if (TEMPORARY_PATTERN.test(source)) return reject('temporary')
   if (QUOTE_PATTERN.test(source)) return reject('quoted_other')
-  if (PLAN_PATTERN.test(source)) return { include: false, kind: 'promise', reason: 'unfulfilled_plan', confidence: 0.2 }
-
+  // MEM-358：显式要求先于计划判断——「记住，我打算下周去旅游」明确要记，
+  // 不能先被 PLAN_PATTERN 拦成「未兑现计划」。
   if (EXPLICIT_REMEMBER_PATTERN.test(source)) {
     return { include: true, kind: 'preference', reason: 'explicit_request', confidence: 0.95 }
   }
+  if (PLAN_PATTERN.test(source)) return { include: false, kind: 'promise', reason: 'unfulfilled_plan', confidence: 0.2 }
+
   if (PREFERENCE_PATTERN.test(source)) {
     return { include: true, kind: 'preference', reason: 'stable_preference', confidence: 0.8 }
   }
@@ -520,7 +548,11 @@ export function classifyMemory(text, options = {}) {
  * 没学到东西就返回空字符串，不占提示词预算。
  */
 export function buildSocialNote(options = {}) {
-  const scope = options.scope === 'group' ? 'group' : options.scope === 'desktop' ? 'desktop' : 'private'
+  // MEM-365：未知 scope 按群聊对待——拿不准的场合按更收敛的分寸说话，不能默认私聊。
+  const scope =
+    options.scope === 'group' || options.scope === 'desktop' || options.scope === 'private'
+      ? options.scope
+      : 'group'
   const style = options.style ?? null
   const memes = Array.isArray(options.memes) ? options.memes : []
   const play = options.play ?? null
@@ -543,13 +575,7 @@ export function buildSocialNote(options = {}) {
   }
 
   if (play && play.likelyPlayful) {
-    const marks = []
-    if (play.slang.length > 0) marks.push(`黑话/网络词：${play.slang.join('、')}`)
-    if (play.acronyms.length > 0) marks.push(`缩写：${play.acronyms.join('、')}`)
-    if (play.numberPlay.length > 0) marks.push(`数字梗：${play.numberPlay.join('、')}`)
-    lines.push(
-      `这句话里可能有谐音、黑话或梗（${marks.join('；')}）。听出来就顺着接一句，听不懂就问一句，别装懂，也别把梗当字面意思回答。`
-    )
+    lines.push(buildPlayHint(play))
   }
 
   if (options.memoryHint === 'rejected') {
@@ -557,6 +583,21 @@ export function buildSocialNote(options = {}) {
   }
 
   return lines.join('\n')
+}
+
+/**
+ * 当轮才有的「这句可能有梗」提示。
+ * 语感与群像属于稳定前缀，这句话的谐音/黑话每一轮都不一样，
+ * 单独拆出来供聊天层放进 turn 槽，避免稳定段随句变化。
+ */
+export function buildPlayHint(play) {
+  if (!play || play.likelyPlayful !== true) return ''
+  const marks = []
+  if (play.slang.length > 0) marks.push(`黑话/网络词：${play.slang.join('、')}`)
+  if (play.acronyms.length > 0) marks.push(`缩写：${play.acronyms.join('、')}`)
+  if (play.numberPlay.length > 0) marks.push(`数字梗：${play.numberPlay.join('、')}`)
+  if (marks.length === 0) return ''
+  return `这句话里可能有谐音、黑话或梗（${marks.join('；')}）。听出来就顺着接一句，听不懂就问一句，别装懂，也别把梗当字面意思回答。`
 }
 
 /** 给设置页和日志用的短标签。 */

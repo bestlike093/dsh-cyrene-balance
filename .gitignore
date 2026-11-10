@@ -5,3 +5,12 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+# 本地临时与备份，不参与构建、不入库
+tmp/
+backup/
+*.bak-*
+# Python 虚拟环境与缓存，由 install 脚本现场重建
+.venv/
+venv/
+__pycache__/
+*.pyc

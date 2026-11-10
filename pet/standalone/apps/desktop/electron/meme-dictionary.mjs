@@ -58,6 +58,8 @@ export function createMemeDictionary(options = {}) {
   let entries = new Map()
   let loaded = false
   let loading = null
+  /** 上次读取失败过：写入前要先备份旧文件，别把「读不了」当「空数据」覆盖。 */
+  let degraded = false
   let saveTimer = null
   let writeChain = Promise.resolve(true)
 
@@ -70,7 +72,11 @@ export function createMemeDictionary(options = {}) {
         try {
           parsed = JSON.parse(await fs.readFile(filePath, 'utf8'))
         } catch (error) {
-          if (error?.code === 'ENOENT') return { ok: true, count: 0 }
+          if (error?.code === 'ENOENT') {
+            // 文件本来就不存在：首次启动，按空词典继续。
+            loaded = true
+            return { ok: true, count: 0 }
+          }
           throw error
         }
         const list = Array.isArray(parsed?.entries) ? parsed.entries : []
@@ -94,13 +100,17 @@ export function createMemeDictionary(options = {}) {
             updatedAt: asNumber(item.updatedAt, 0)
           })
         }
+        loaded = true
+        degraded = false
         return { ok: true, count: entries.size }
       } catch (error) {
+        // 读失败不置 loaded：下次 load 还会再试；置 degraded，
+        // 让 flush 先备份旧文件，避免把暂时读不了的旧词典当成空数据冲掉。
         log('群梗词典读取失败，按空词典继续', error)
+        degraded = true
         entries = new Map()
         return { ok: false, reason: 'unreadable' }
       } finally {
-        loaded = true
         loading = null
       }
     })()
@@ -129,6 +139,14 @@ export function createMemeDictionary(options = {}) {
           .slice(0, maxEntries)
         const temp = `${filePath}.tmp`
         await fs.mkdir(filePath.replace(/[\\/][^\\/]+$/, ''), { recursive: true })
+        // 读取失败过：先备份旧文件再覆盖，保住里面可能还在的数据。
+        if (degraded) {
+          try {
+            await fs.copyFile(filePath, `${filePath}.bak`)
+          } catch {
+            // 原文件可能不存在或仍不可读；备份失败不拦正常写入。
+          }
+        }
         await fs.writeFile(temp, JSON.stringify({ version: VERSION, entries: list }), 'utf8')
         await fs.rename(temp, filePath)
         return true
@@ -141,32 +159,37 @@ export function createMemeDictionary(options = {}) {
   }
 
   /** 太久没出现、也没被用过的条目直接清掉，避免文件无限长。 */
-  function prune() {
-    const at = now()
+  function prune(at = now()) {
     for (const [key, entry] of entries) {
       const lastSeen = entry.lastSeenAt || entry.updatedAt
       if (entry.uses === 0 && at - lastSeen > STALE_DAYS * 86_400_000) entries.delete(key)
     }
   }
 
-  /** 收录候选：见一次加一次，不覆盖第一次出现的时间。 */
+  /** 收录候选：同一批（同一次调用）里每个短语只算一次出现，不覆盖第一次出现的时间。 */
   function observe(scope, candidates, at = now()) {
     const cleanScopeValue = cleanScope(scope)
     if (cleanScopeValue === '' || !Array.isArray(candidates)) return 0
+    // 清理不能只在落盘时做：内存里的陈旧条目也要顺手 prune，避免越攒越多。
+    // 用本次 observe 的时间基准，保证和条目上的 lastSeenAt 是同一把时钟。
+    prune(at)
     let changed = 0
+    // MEM-190：候选来自「最近 N 条」的滑动窗口，逐条 seen+=count 会随窗口×调用次数虚高；
+    // 同一批里每个短语只加一次，候选自带的 count 只反映窗口内次数，不再累加。
+    const seenInBatch = new Set()
     for (const item of candidates) {
       const phrase = cleanPhrase(item?.phrase ?? item)
-      if (phrase === '') continue
+      if (phrase === '' || seenInBatch.has(phrase)) continue
+      seenInBatch.add(phrase)
       const key = keyOf(cleanScopeValue, phrase)
       const previous = entries.get(key)
-      const count = Math.max(1, Math.floor(asNumber(item?.count, 1)))
       if (previous === undefined) {
         entries.set(key, {
           scope: cleanScopeValue,
           phrase,
           firstSeenAt: at,
           lastSeenAt: at,
-          seen: count,
+          seen: 1,
           uses: 0,
           pickedUp: 0,
           askedBack: 0,
@@ -175,7 +198,7 @@ export function createMemeDictionary(options = {}) {
           updatedAt: at
         })
       } else {
-        previous.seen += count
+        previous.seen += 1
         previous.lastSeenAt = at
         previous.updatedAt = at
       }
@@ -196,6 +219,8 @@ export function createMemeDictionary(options = {}) {
     for (const entry of entries.values()) {
       if (entry.scope !== cleanScopeValue || entry.retired) continue
       if (!text.includes(entry.phrase)) continue
+      // MEM-194：24 小时内刚用过的同一个短语不重复计数，避免一句话里反复出现被算成多次。
+      if (entry.lastUsedAt > 0 && at - entry.lastUsedAt < RECENT_USE_MS) continue
       entry.uses += 1
       entry.lastUsedAt = at
       entry.updatedAt = at

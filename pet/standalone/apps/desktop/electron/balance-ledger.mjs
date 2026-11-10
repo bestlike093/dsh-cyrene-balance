@@ -15,6 +15,9 @@
 export const LEDGER_VERSION = 1
 export const LEDGER_WINDOW_DAYS = 7
 
+/** 未来日期的宽限：只丢明显未来（>30 天，多半是脏数据），近未来的切片保留等它自然进窗。 */
+const FUTURE_GRACE_DAYS = 30
+
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/
 const DAY_MS = 86_400_000
 
@@ -29,7 +32,9 @@ function asFiniteNumber(value) {
 }
 
 function asIsoOrNull(value) {
-  return typeof value === 'string' && value !== '' ? value : null
+  if (typeof value !== 'string' || value === '') return null
+  // 必须是能解析的时间串：Date.parse 不过的脏数据判空，别把乱串当时间戳传出去。
+  return Number.isNaN(Date.parse(value)) ? null : value
 }
 
 /** 严格校验 YYYY-MM-DD，返回 UTC 日序号；非法日期返回 null。 */
@@ -114,7 +119,8 @@ export function pruneSlices(slices, options = {}) {
   const kept = {}
   for (const [key, value] of Object.entries(isRecord(slices) ? slices : {})) {
     const day = dayNumber(key)
-    if (day === null || day < cutoff || day > today) continue
+    // 只丢明显未来的切片（时钟错乱写的远日期），近未来不丢，等它自己进窗。
+    if (day === null || day < cutoff || day > today + FUTURE_GRACE_DAYS) continue
     kept[key] = value
   }
   return kept
@@ -142,10 +148,17 @@ export function pruneAcks(acks, options = {}) {
     const at = new Date(ack.at)
     if (Number.isNaN(at.getTime())) continue
     const day = dayNumber(dateKeyInTimeZone(at, timeZone))
-    if (day === null || day < cutoff || day > today) continue
+    if (day === null || day < cutoff || day > today + FUTURE_GRACE_DAYS) continue
+    // 带过 acknowledgedAt（响铃时刻）与 balance（响铃时余额快照）的 ack 要原样保留，
+    // 否则 shouldAlert 判断「余额是否进一步下降」的依据会被裁剪丢掉。
+    const ackBalance = asFiniteNumber(ack.balance)
     kept[segment] = {
       at: ack.at,
-      level: ack.level === 'confirmed' ? 'confirmed' : 'shown'
+      level: ack.level === 'confirmed' ? 'confirmed' : 'shown',
+      ...(typeof ack.acknowledgedAt === 'string' && ack.acknowledgedAt !== ''
+        ? { acknowledgedAt: ack.acknowledgedAt }
+        : {}),
+      ...(ackBalance !== null ? { balance: ackBalance } : {})
     }
   }
   return kept
@@ -159,6 +172,13 @@ export function migrateLedger(raw, options = {}) {
   const now = options.now instanceof Date ? options.now : new Date()
   const timeZone = options.timeZone ?? systemTimeZone()
   if (!isRecord(raw)) return createEmptyLedger()
+
+  // 未来版本（version > 1）：结构不认识，覆盖回去会丢新字段。
+  // 返回不可迁移标记，让存储层保留原文件、跳过写盘，别把新版账本悄悄抹成 v1。
+  const rawVersion = Number(raw.version)
+  if (Number.isFinite(rawVersion) && rawVersion > LEDGER_VERSION) {
+    return { __unmigratable: true, version: rawVersion }
+  }
 
   if (raw.version === LEDGER_VERSION && isRecord(raw.slices)) {
     const slices = {}

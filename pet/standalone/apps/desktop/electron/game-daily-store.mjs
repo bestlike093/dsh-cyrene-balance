@@ -38,6 +38,22 @@ export function createGameDailyStore(options = {}) {
   const statePath = path.join(stateDir, 'state.json')
   const runsRoot = path.join(stateDir, RUNS_DIR)
 
+  /**
+   * 写串行队列：update 的读-改-写全程排队，两个并发更新不会
+   * 都从同一份旧 state 出发，后写的把先写的改动覆盖掉。
+   */
+  let writeQueue = Promise.resolve()
+
+  function enqueueWrite(task) {
+    const run = writeQueue.then(task)
+    // 失败也吞进链尾：一个任务抛错不能卡死后面的写。
+    writeQueue = run.then(
+      () => {},
+      () => {}
+    )
+    return run
+  }
+
   async function load() {
     let raw
     try {
@@ -74,21 +90,29 @@ export function createGameDailyStore(options = {}) {
   /**
    * 更新一个游戏。校验不过时原样返回旧 state，让界面只标红不吞输入。
    * `patch.gamePath` 传空字符串表示清空。
+   * 读-改-写整体排队，进队列后才 load，读到的是上一笔写完的最新 state。
    */
-  async function update(input) {
+  function update(input) {
     if (!isRecord(input) || typeof input.game !== 'string' || !GAME_IDS.includes(input.game)) {
-      return { ok: false, error: 'game 不在支持列表里', ...view((await load()).state) }
+      // 非法 game 不进写队列，但保持原行为：带上当前 state 的视图一起返回。
+      return (async () => ({
+        ok: false,
+        error: 'game 不在支持列表里',
+        ...view((await load()).state)
+      }))()
     }
 
-    const { state } = await load()
-    const patch = isRecord(input.patch) ? input.patch : {}
-    const result = updateGameConfig(state, input.game, patch, Date.now())
-    if (!result.ok) {
-      return { ok: false, issues: result.issues, ...view(result.state) }
-    }
+    return enqueueWrite(async () => {
+      const { state } = await load()
+      const patch = isRecord(input.patch) ? input.patch : {}
+      const result = updateGameConfig(state, input.game, patch, Date.now())
+      if (!result.ok) {
+        return { ok: false, issues: result.issues, ...view(result.state) }
+      }
 
-    await persist(result.state)
-    return { ok: true, issues: [], ...view(result.state) }
+      await persist(result.state)
+      return { ok: true, issues: [], ...view(result.state) }
+    })
   }
 
   /** 生成计划（不落盘、不注册），供设置页预览或排查。 */

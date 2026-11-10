@@ -256,6 +256,124 @@ body {
   word-break: break-word;
 }
 
+/* B 站与邮件面板 */
+.a-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.a-input {
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--cy-border);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--cy-ink);
+  font-size: 12px;
+}
+
+.a-field-row .a-input {
+  flex: 1;
+  min-width: 180px;
+}
+
+.a-mail-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.a-mail-form .a-input {
+  width: 100%;
+}
+
+.a-mail-form textarea {
+  resize: vertical;
+}
+
+.a-subhead {
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cy-ink);
+}
+
+.a-mail-settings,
+.a-browse-settings {
+  margin-top: 4px;
+  padding: 10px;
+  border: 1px dashed var(--cy-line);
+  border-radius: 10px;
+  background: var(--cy-soft, #fff5f8);
+}
+
+.a-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.a-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--cy-ink);
+  cursor: pointer;
+}
+
+.a-toggle input[type='checkbox'] {
+  accent-color: var(--cy-primary, #ff6fa5);
+}
+
+.a-browse-results {
+  margin-top: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.a-browse-item {
+  padding: 8px 10px;
+  border: 1px solid var(--cy-line);
+  border-radius: 10px;
+  background: var(--white);
+}
+
+.a-browse-title {
+  font-size: 13px;
+  color: var(--cy-ink);
+  font-weight: 600;
+}
+
+.a-browse-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--cy-muted);
+}
+
+.a-browse-desc {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--cy-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.a-browse-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 @media (max-width: 620px) {
   .a-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

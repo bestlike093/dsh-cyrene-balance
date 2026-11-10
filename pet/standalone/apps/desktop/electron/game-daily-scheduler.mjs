@@ -15,13 +15,31 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import {
   DEFAULT_TASK_PREFIX,
+  GAME_IDS,
   buildQueryScript,
   buildRegisterScript,
-  buildRunnerArguments,
   buildUnregisterScript,
   enabledGames,
   toTaskSpec
 } from '@pet/core/browser'
+
+/**
+ * Windows 命令行参数转义：双引号包裹 + 内部引号转义。
+ *
+ * 计划任务的 Argument 是整串交给 CreateProcess 的，按 CRT 规则解析：
+ * 末尾反斜杠会把收尾引号转义掉（悬空引号），路径里的引号会截断参数，
+ * 所以反斜杠要按「后跟引号/结尾」成对加倍，内嵌引号写成 \"。
+ */
+function quoteCommandArg(value) {
+  const escaped = String(value).replace(/(\\*)("|$)/g, (match, backslashes, quote) => {
+    return backslashes + backslashes + (quote === '"' ? '\\"' : '')
+  })
+  return `"${escaped}"`
+}
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
 
 /** 找系统 Node。Electron 自带的 electron.exe 需要 RUN_AS_NODE，计划任务传不了环境变量。 */
 export function resolveNodeProgram(candidates = [], exists = () => false) {
@@ -113,9 +131,16 @@ export function createDailyScheduler(options = {}) {
 
     const items = enabledGames(state).map((config) => {
       const spec = toTaskSpec(config, { prefix: DEFAULT_TASK_PREFIX })
+      // runnerPath / stateDir 都走本地转义：路径带空格、尾反斜杠或引号时不悬空、不被截断。
       const action = {
         program: nodeProgram,
-        arguments: `"${runnerPath}" ${buildRunnerArguments(config.game, { stateDir })}`,
+        arguments: [
+          quoteCommandArg(runnerPath),
+          '--game',
+          quoteCommandArg(config.game),
+          '--state-dir',
+          quoteCommandArg(stateDir)
+        ].join(' '),
         workingDirectory: projectRoot ?? path.dirname(runnerPath)
       }
       return {
@@ -226,12 +251,17 @@ export function createDailyScheduler(options = {}) {
    *
    * `state` 为 null 时用传入的 names（删除后核对用）；否则读 state 里所有任务的名称，
    * 包括已关闭的游戏——关闭之后也要能确认任务真的被移除了。
+   * state 里没有或不可用时回落到 GAME_IDS，不把四款游戏硬编码在函数体里。
    */
   async function query(state, names = null) {
+    const stateGames =
+      isRecord(state) && isRecord(state.games)
+        ? Object.keys(state.games).filter((game) => GAME_IDS.includes(game))
+        : null
     const targetNames =
       Array.isArray(names) && names.length > 0
         ? names
-        : ['genshin', 'hi3', 'starrail', 'zzz'].map((game) => taskName(game))
+        : (stateGames ?? GAME_IDS).map((game) => taskName(game))
 
     await fs.mkdir(automationDir, { recursive: true })
     const scriptPath = path.join(automationDir, 'query.ps1')

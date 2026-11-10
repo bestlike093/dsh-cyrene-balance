@@ -37,6 +37,8 @@ export function createBalancePoller(options = {}) {
   let timer = null
   let running = false
   let busy = false
+  /** 当前在飞的 tick 任务；没有则为 null。 */
+  let inFlight = null
 
   function clearTimerHandle() {
     if (timer !== null) {
@@ -48,12 +50,20 @@ export function createBalancePoller(options = {}) {
   async function runTick() {
     if (busy) return
     busy = true
+    const work = Promise.resolve()
+      .then(tick)
+      .catch((error) => {
+        onError?.(error)
+      })
+      .finally(() => {
+        busy = false
+      })
+    inFlight = work
     try {
-      await tick()
-    } catch (error) {
-      onError?.(error)
+      await work
     } finally {
-      busy = false
+      // 只清自己这一笔，别把后来新起的一笔误清掉。
+      if (inFlight === work) inFlight = null
     }
   }
 
@@ -72,11 +82,19 @@ export function createBalancePoller(options = {}) {
     return true
   }
 
+  /** 等在飞的 tick 落定。tick 内部已吞错，这个 Promise 本身不会 reject。 */
+  function waitUntilIdle() {
+    return inFlight ?? Promise.resolve()
+  }
+
+  /**
+   * 停表。返回一个 Promise，等在飞的 tick 结束——宿主退出前调它，
+   * 最后一把账（写账本/告警 ack）才能刷完再走，而不是被进程退出拦腰砍断。
+   */
   function stop() {
-    const wasRunning = running
     running = false
     clearTimerHandle()
-    return wasRunning
+    return waitUntilIdle()
   }
 
   function updateInterval(next) {
@@ -90,6 +108,7 @@ export function createBalancePoller(options = {}) {
   return {
     start,
     stop,
+    waitUntilIdle,
     updateInterval,
     getIntervalMs: () => intervalMs,
     isRunning: () => running

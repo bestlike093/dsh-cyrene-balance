@@ -9,6 +9,7 @@
  * 念头会过期，决策只留最近若干条，避免长期运行后无限增长。
  */
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { decideProactive } from './proactive.mjs'
 
 const SCHEMA_VERSION = 2
@@ -57,13 +58,16 @@ export function gateOf(reason) {
 function freshThought(item) {
   const at = Math.max(0, asNumber(item?.at, 0))
   const ttl = Math.max(1000, asNumber(item?.ttlMs, DEFAULT_THOUGHT_LIMITS.ttlMs))
+  const savedExpiry = asNumber(item?.expiresAt, 0)
   return {
     id: asText(item?.id, 40) || `t-${at}-${Math.random().toString(36).slice(2, 8)}`,
     scope: cleanScope(item?.scope),
     text: asText(item?.text),
     kind: asText(item?.kind, 24) || 'idle',
     at,
-    expiresAt: Math.max(0, asNumber(item?.expiresAt, at + ttl)),
+    // 0 与负数一律视为「没记过期时间」，按 at+ttl 重算，
+    // 避免旧数据把 0 当成「永不过期」悄悄留下来。
+    expiresAt: savedExpiry > 0 ? savedExpiry : at + ttl,
     status: STATUSES.has(item?.status) ? item.status : 'open',
     usedAt: Math.max(0, asNumber(item?.usedAt, 0)),
     weight: Math.min(1, Math.max(0, asNumber(item?.weight, 0.5)))
@@ -83,6 +87,8 @@ function freshDecision(item) {
     at: Math.max(0, asNumber(item?.at, 0)),
     scope: cleanScope(item?.scope),
     speak: item?.speak === true,
+    // source 记录决策来自哪条通道；回读时不能丢，观察台才能看出全貌。
+    source: asText(item?.source, 20),
     gate: asText(item?.gate, 20) || 'hard',
     reason: asText(item?.reason, 40) || 'unknown',
     text: asText(item?.text, 160),
@@ -103,6 +109,9 @@ export function createThoughtPool({ file = null, now = Date.now, log = () => {} 
   let loading = null
   let saveTimer = null
   let needsBackup = false
+  // 最近一次读盘失败（非 ENOENT）的原因；坏文件隔离成功前禁止写盘，
+  // 否则会用内存里的空数据把原文件整个覆盖掉。
+  let loadError = null
 
   async function ready() {
     if (loaded) return { thoughts, decisions }
@@ -118,10 +127,21 @@ export function createThoughtPool({ file = null, now = Date.now, log = () => {} 
             decisions = cleanDecisions(parsed.decisions)
           }
         }
-      } catch (error) {
-        if (error?.code !== 'ENOENT') log('念头池读取失败，从空白开始', error)
-      } finally {
+        loadError = null
         loaded = true
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          // 文件本来就不存在，属于首次启动，直接按空白开始。
+          loadError = null
+          loaded = true
+        } else {
+          // 读失败保持未加载，让下一次 ready() 有机会重试；
+          // 坏文件在写盘前会被先隔离，而不是被空数据覆盖。
+          loadError = error
+          loaded = false
+          log('念头池读取失败，等待重试', error)
+        }
+      } finally {
         loading = null
       }
       return { thoughts, decisions }
@@ -141,7 +161,23 @@ export function createThoughtPool({ file = null, now = Date.now, log = () => {} 
   async function persist() {
     if (file === null) return
     try {
-      await fs.mkdir(file.replace(/[\\/][^\\/]+$/, ''), { recursive: true })
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      // 读盘失败过的坏文件不能直接覆盖：先改名隔离，改不了名就这次不写。
+      // 隔离成功后才允许写新文件，坏文件本身留在 .corrupt-* 里等人工查看。
+      if (loadError !== null) {
+        try {
+          await fs.rename(file, `${file}.corrupt-${Date.now()}`)
+          loadError = null
+        } catch (error) {
+          if (error?.code === 'ENOENT') {
+            // 文件已经不在了，没有可覆盖的坏文件，放行这次写入。
+            loadError = null
+          } else {
+            log('念头池坏文件隔离失败，本次跳过写入', error)
+            return
+          }
+        }
+      }
       if (needsBackup) {
         try {
           await fs.copyFile(file, `${file}.bak`)
@@ -149,11 +185,15 @@ export function createThoughtPool({ file = null, now = Date.now, log = () => {} 
           if (error?.code !== 'ENOENT') log('念头池迁移备份失败，继续写入', error)
         }
       }
+      // 先写临时文件再 rename：写到一半进程退出，最多留下 .tmp，
+      // 不会把正式文件截成半截 JSON。
+      const tmp = `${file}.tmp`
       await fs.writeFile(
-        file,
+        tmp,
         JSON.stringify({ schemaVersion: SCHEMA_VERSION, thoughts, decisions }),
         'utf8'
       )
+      await fs.rename(tmp, file)
       needsBackup = false
     } catch (error) {
       log('念头池写入失败', error)

@@ -12,13 +12,18 @@
 
 import { buildSegment, shouldAlert } from './balance-alert.mjs'
 import { createBalancePoller } from './balance-polling.mjs'
+import { dateKeyInTimeZone, systemTimeZone } from './balance-ledger.mjs'
 
-/** 取账本里日期最新的一片；recordBalance 写完当天后，它就是当天。 */
-function latestSlice(ledger) {
+/**
+ * 取账本里日期最新的一片；recordBalance 写完当天后，它就是当天。
+ * 未来日期的切片（时钟错乱写的脏数据）不算数，避免它永远压着真实切片。
+ */
+function latestSlice(ledger, today = dateKeyInTimeZone(new Date(), systemTimeZone())) {
   if (!ledger || typeof ledger.slices !== 'object' || ledger.slices === null) return null
   let latest = null
   for (const slice of Object.values(ledger.slices)) {
     if (!slice || typeof slice.date !== 'string') continue
+    if (slice.date > today) continue
     if (latest === null || slice.date > latest.date) latest = slice
   }
   return latest
@@ -42,7 +47,7 @@ export function createBalanceMonitor(options = {}) {
   const onAlert = typeof options.onAlert === 'function' ? options.onAlert : null
   const canAlert =
     onAlert !== null &&
-    typeof store.hasAck === 'function' &&
+    typeof store.getAck === 'function' &&
     typeof store.markAck === 'function'
   let poller = null
 
@@ -56,17 +61,20 @@ export function createBalanceMonitor(options = {}) {
     const segment = buildSegment(slice.date, threshold)
     if (segment === null) return
 
-    const acked = store.hasAck(segment) ? { at: '', level: 'shown' } : null
+    const acked = store.getAck(segment)
     if (!shouldAlert(slice, threshold, acked)) return
 
-    let shown = true
+    let shown = false
     try {
-      shown = onAlert({
-        segment,
-        date: slice.date,
-        balance: slice.balance,
-        threshold
-      }) !== false
+      // onAlert 可能返回 Promise（合成语音等），也可能同步返回 false（窗口不在/冷却中）。
+      // 等它落定，只有明确 true 才算真的显示了；失败或非 true 都不落 ack，下一轮再试。
+      shown =
+        (await onAlert({
+          segment,
+          date: slice.date,
+          balance: slice.balance,
+          threshold
+        })) === true
     } catch (error) {
       onError({ code: 'balance-alert-failed', cause: error })
       return
@@ -74,7 +82,8 @@ export function createBalanceMonitor(options = {}) {
     if (!shown) return
 
     try {
-      await store.markAck(segment, 'shown')
+      // ack 带上响铃时刻的余额快照，下次「又降了」才能和它比较。
+      await store.markAck(segment, 'shown', { balance: slice.balance })
     } catch (error) {
       onError({ code: error?.code ?? 'balance-ack-failed', cause: error })
     }

@@ -11,23 +11,39 @@
 
 /** 内部标签：成对、转义、截断、孤立都清掉。 */
 const CONTROL_TAG_PATTERN = /<\/?\s*(pc_[a-z0-9_]+|cyrene_[a-z0-9_]+|memory_[a-z0-9_]+)\s*\/?>/gi
-/** 成对标签连同里面的协议值一起删：`<pc_mood>soft</pc_mood>` 不该留下 soft。 */
-const CONTROL_BLOCK_PATTERN =
-  /<\s*(pc_[a-z0-9_]+|cyrene_[a-z0-9_]+|memory_[a-z0-9_]+)\s*>[\s\S]*?<\/\s*\1\s*>/gi
+/** 每轮只剥「中间不含 <」的最内层成对标签。 */
+const INNERMOST_CONTROL_BLOCK =
+  /<\s*(pc_[a-z0-9_]+|cyrene_[a-z0-9_]+|memory_[a-z0-9_]+)\s*>([^<]*?)<\/\s*\1\s*>/gi
 
-/** 只保留第一句时，这些开头不算「内容」。 */
-const FAREWELL_PATTERN =
-  /^(晚安|晚安啦|早点睡|去睡吧|睡觉啦|睡吧|好梦|明天见|回头见|拜拜|再见|先这样|不聊了|我睡了|困了|谢谢|谢谢啦|谢啦|多谢|感谢|收到|知道啦|好|嗯|哦)[。.!！?？~～…\s]*$/i
+/**
+ * 迭代式剥除成对控制块。
+ *
+ * 为什么不用一条非贪婪正则直接删：嵌套同名标签
+ * （`<pc_x>a<pc_x>b</pc_x>c</pc_x>`）会被非贪婪匹配截在第一个闭标签上，
+ * 留下 `c</pc_x>` 这种孤儿。这里每轮只删最内层成对标签，反复剥到剥不动为止；
+ * 剩下的孤立标签交给 CONTROL_TAG_PATTERN。
+ */
+function stripControlBlocks(text) {
+  let next = text
+  for (let round = 0; round < 32; round += 1) {
+    const pass = next.replace(INNERMOST_CONTROL_BLOCK, '')
+    if (pass === next) break
+    next = pass
+  }
+  return next
+}
 
 /**
  * 清掉模型漏出来的内部控制标签。
  * 标签里的内容属于协议，不属于要对用户说的话。
  */
 export function stripControlTags(text) {
-  return String(text ?? '')
-    .replace(CONTROL_BLOCK_PATTERN, '')
-    .replace(CONTROL_TAG_PATTERN, '')
+  return stripControlBlocks(String(text ?? '')).replace(CONTROL_TAG_PATTERN, '')
 }
+
+/** 只保留第一句时，这些开头不算「内容」。 */
+const FAREWELL_PATTERN =
+  /^(晚安|晚安啦|早点睡|去睡吧|睡觉啦|睡吧|好梦|明天见|回头见|拜拜|再见|先这样|不聊了|我睡了|困了|谢谢|谢谢啦|谢啦|多谢|感谢|收到|知道啦|好|嗯|哦)[。.!！?？~～…\s]*$/i
 
 /**
  * 合并完全相同的整段复读。
@@ -41,12 +57,32 @@ export function collapseDuplicateParagraphs(text) {
   const paragraphs = source.split(/\n{2,}/)
   const kept = []
   const seen = new Set()
+  // 代码块里的段落不去重：围栏之间的内容整段保留，
+  // 两段相同的代码示例各有各的意义，不能当复读删掉。
+  // 围栏成对切换；没闭合的围栏会把后面的段落都当代码，宁可少删也不误删。
+  let inFence = false
   for (const paragraph of paragraphs) {
-    const key = paragraph.trim()
-    if (key === '') continue
-    if (seen.has(key)) continue
-    seen.add(key)
-    kept.push(paragraph.trim())
+    const trimmed = paragraph.trim()
+    if (trimmed === '') continue
+    const startsFence = trimmed.startsWith('```')
+    // 单段自闭合的代码块（起止围栏在同一段里，如 ```\ncode\n```）不切换状态，整段保留；
+    // 围栏状态只在围栏单独成段时成对切换。
+    if (startsFence && trimmed.endsWith('```') && trimmed.length > 3) {
+      kept.push(trimmed)
+      continue
+    }
+    if (startsFence) {
+      inFence = !inFence
+      kept.push(trimmed)
+      continue
+    }
+    if (inFence) {
+      kept.push(trimmed)
+      continue
+    }
+    if (seen.has(trimmed)) continue
+    seen.add(trimmed)
+    kept.push(trimmed)
   }
   return kept.join('\n\n')
 }
@@ -94,9 +130,30 @@ export function shouldStaySilent(options = {}) {
   const userText = String(options.userText ?? '')
   const lastAssistantText = String(options.lastAssistantText ?? '')
   if (!isFarewell(userText)) return false
-  if (lastAssistantText.trim() === '') return false
-  return isFarewell(lastAssistantText) || /(晚安|好梦|明天见|早点睡|去睡吧)/.test(lastAssistantText)
+  const last = lastAssistantText.trim()
+  if (last === '') return false
+  // 只有上一条是「纯收尾句」才沉默：剥掉收尾词后正文为空（或只剩称呼）才算，
+  // 像「晚安，明天也记得交报告哦」这种带内容的晚安句不算，避免把用户的「谢谢」也吞掉。
+  return isPureFarewell(last)
 }
+
+/**
+ * 是不是「纯收尾」：剥掉收尾词、标点、语气词后，正文为空或只剩称呼。
+ * 「晚安，好梦」算；「晚安，明天记得交报告」不算。
+ */
+function isPureFarewell(text) {
+  const left = String(text ?? '')
+    .replace(/[♪～~]+/g, '')
+    .replace(FAREWELL_WORDS, '')
+    .replace(/[。.!！?？~～…，,、：:；;\s啦呀啊嘛哦哟]+/g, '')
+  if (left === '') return true
+  // 只剩常见称呼也按收尾算（「晚安，主人」）；称呼表按需再扩。
+  return /^(主人|主银|老板|前辈|宝贝|亲爱的|哥哥|姐姐)$/.test(left)
+}
+
+/** 收尾词：剥掉后剩下的才算「有内容」。长的排前面，避免被短词先吃掉。 */
+const FAREWELL_WORDS =
+  /(晚安啦|晚安|早点睡|去睡吧|睡觉啦|睡吧|好梦|明天见|回头见|拜拜|再见|先这样|不聊了|我睡了|困了|谢谢啦|谢啦|多谢|感谢|谢谢|收到|知道啦|知道了|好的|好|嗯+|哦+)/g
 
 /** 带引号的直接引语：只认这一种，避免把普通描述误判成引用。 */
 const QUOTE_CLAIM_PATTERN =
@@ -121,6 +178,18 @@ export function fixMisattributedQuote(text, options = {}) {
   }
 
   const ownerOf = (quote) => {
+    // 优先找「内容就是引文本身」的发言（去掉引号后完全相等）：
+    // 多人说过同一句话时，按最近一条逐字吻合的发言归人，而不是归给「包含」它的第一人。
+    const exact = [...history]
+      .reverse()
+      .find((item) => {
+        const content = typeof item?.text === 'string' ? item.text.trim() : ''
+        const who = typeof item?.speaker === 'string' ? item.speaker.trim() : ''
+        if (content === '' || who === '') return false
+        return content.replace(/[「」“”"'`]/g, '').trim() === quote
+      })
+    if (exact !== undefined) return exact.speaker.trim()
+    // 退回包含匹配：找不到逐字吻合的原话时，才找最近一条包含引文的发言。
     for (let index = history.length - 1; index >= 0; index -= 1) {
       const item = history[index]
       const content = typeof item?.text === 'string' ? item.text : ''

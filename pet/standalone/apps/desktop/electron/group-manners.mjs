@@ -34,19 +34,25 @@ function asNumber(value, fallback) {
   return Number.isFinite(value) ? value : fallback
 }
 
+/** 负数或 0 的节奏参数没有意义（0 窗口等于永远冷场、0 上限等于没上限），按默认值处理。 */
+function asPositive(value, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : fallback
+}
+
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
 export function createGroupManners(options = {}) {
   const limits = {
-    hotWindowMs: asNumber(options.hotWindowMs, DEFAULT_GROUP_MANNERS.hotWindowMs),
-    hotMessageCount: asNumber(options.hotMessageCount, DEFAULT_GROUP_MANNERS.hotMessageCount),
-    hotSpeakerCount: asNumber(options.hotSpeakerCount, DEFAULT_GROUP_MANNERS.hotSpeakerCount),
-    selfCooldownMs: asNumber(options.selfCooldownMs, DEFAULT_GROUP_MANNERS.selfCooldownMs),
-    largeGroupMembers: asNumber(options.largeGroupMembers, DEFAULT_GROUP_MANNERS.largeGroupMembers),
-    seenTtlMs: asNumber(options.seenTtlMs, DEFAULT_GROUP_MANNERS.seenTtlMs),
-    recentLimit: asNumber(options.recentLimit, DEFAULT_GROUP_MANNERS.recentLimit)
+    hotWindowMs: asPositive(options.hotWindowMs, DEFAULT_GROUP_MANNERS.hotWindowMs),
+    hotMessageCount: asPositive(options.hotMessageCount, DEFAULT_GROUP_MANNERS.hotMessageCount),
+    hotSpeakerCount: asPositive(options.hotSpeakerCount, DEFAULT_GROUP_MANNERS.hotSpeakerCount),
+    selfCooldownMs: asPositive(options.selfCooldownMs, DEFAULT_GROUP_MANNERS.selfCooldownMs),
+    largeGroupMembers: asPositive(options.largeGroupMembers, DEFAULT_GROUP_MANNERS.largeGroupMembers),
+    seenTtlMs: asPositive(options.seenTtlMs, DEFAULT_GROUP_MANNERS.seenTtlMs),
+    recentLimit: asPositive(options.recentLimit, DEFAULT_GROUP_MANNERS.recentLimit)
   }
   const now = typeof options.now === 'function' ? options.now : Date.now
   /** scope -> { at, senderOpenId }[] */
@@ -57,7 +63,8 @@ export function createGroupManners(options = {}) {
   const seen = new Map()
 
   function recentFor(scope, at) {
-    const list = (recent.get(scope) ?? []).filter((item) => at - item.at <= limits.seenTtlMs)
+    // MEM-336：加 item.at <= at 下界，未来时间戳（时钟异常/伪造）不能永远赖在窗口里。
+    const list = (recent.get(scope) ?? []).filter((item) => item.at <= at && at - item.at <= limits.seenTtlMs)
     if (list.length > limits.recentLimit) list.splice(0, list.length - limits.recentLimit)
     recent.set(scope, list)
     return list
@@ -118,7 +125,9 @@ export function createGroupManners(options = {}) {
     if (input.addressed === true) return { allow: true, reason: 'addressed' }
 
     const lastSpoken = spokenAt.get(scope) ?? 0
-    if (lastSpoken > 0 && at - lastSpoken >= 0 && at - lastSpoken < limits.selfCooldownMs) {
+    // MEM-337：时钟回拨时 at - lastSpoken 为负，原来的 >=0 门槛会让冷却被跳过；
+    // 用绝对值看「距上次开口多近」，时钟往哪边漂都算还在冷却里。
+    if (lastSpoken > 0 && Math.abs(at - lastSpoken) < limits.selfCooldownMs) {
       return { allow: false, reason: 'just-spoke' }
     }
 

@@ -55,12 +55,14 @@ const THEME_SHORT = { OceanBlue: 'blue', SakuraPink: 'pink', Paper: 'ink' }
 // 一级导航只负责分组，真正的面板仍由 data-panel 决定。
 // 旧深链（chat / voice / status …）全部保留，showPanel 负责把一级与子标签一起点亮。
 const PANEL_GROUPS = {
-  overview: { labelKey: 'nav.overview', panels: ['overview'] },
-  self: { labelKey: 'nav.self', panels: ['general', 'hud'] },
-  talk: { labelKey: 'nav.talk', panels: ['connection', 'voice'] },
-  company: { labelKey: 'nav.company', panels: ['proactive', 'routine'] },
+  self: { labelKey: 'nav.self', panels: ['axes', 'assessment', 'speech'] },
+  look: { labelKey: 'nav.look', panels: ['general', 'hud'] },
+  ability: { labelKey: 'nav.ability', panels: ['ability'] },
   memory: { labelKey: 'nav.memory', panels: ['memory'] },
-  more: { labelKey: 'nav.more', panels: ['ability', 'account', 'data'] }
+  talk: { labelKey: 'nav.talk', panels: ['connection', 'voice'] },
+  outside: { labelKey: 'nav.outside', panels: ['account'] },
+  active: { labelKey: 'nav.active', panels: ['proactive', 'routine'] },
+  system: { labelKey: 'nav.system', panels: ['overview', 'data'] }
 }
 
 const PANEL_TO_GROUP = Object.fromEntries(
@@ -75,6 +77,8 @@ const PANEL_META = {
   voice: { titleKey: 'panel.voice', descKey: 'page.voice.desc' },
   proactive: { titleKey: 'panel.proactive', descKey: 'page.proactive.desc' },
   routine: { titleKey: 'panel.routine', descKey: 'page.routine.desc' },
+  assessment: { titleKey: 'panel.assessment', descKey: 'page.assessment.desc' },
+  speech: { titleKey: 'panel.speech', descKey: 'page.speech.desc' },
   memory: { titleKey: 'panel.memory', descKey: 'page.memory.desc' },
   ability: { titleKey: 'panel.ability', descKey: 'page.ability.desc' },
   account: { titleKey: 'panel.account', descKey: 'page.account.desc' },
@@ -110,6 +114,18 @@ function applyTheme(preset) {
   for (const button of document.querySelectorAll('#theme-seg button')) {
     button.classList.toggle('active', button.dataset.theme === preset)
   }
+}
+
+/* 配色作用范围：勾上的位置跟着上面选的配色走，取消勾选就固定成当前这套。 */
+function themeScopePatch(preset) {
+  const slots = {}
+  for (const button of document.querySelectorAll('#theme-scope-seg button')) {
+    const key = button.dataset.themeSlot
+    slots[key] = button.classList.contains('active')
+      ? { follow: true }
+      : { follow: false, preset }
+  }
+  return slots
 }
 
 function renderPageHead(name) {
@@ -277,11 +293,106 @@ function showPanel(name) {
     if (kindSelect !== null) kindSelect.onchange = () => void refreshMemoryFacts()
     void refreshMemoryFacts()
   }
+  if (target === 'speech') {
+    bindSpeechPanel()
+    void refreshSpeechHabits()
+  }
   if (target === 'data') void refreshPreflight()
   if (target === 'routine') void refreshAgenda()
   if (target === 'overview') {
     void refreshOverview()
     void refreshPreflight()
+  }
+}
+
+/* ---------- 她学到的说法 ---------- */
+
+// 桌宠本体与设置窗同源，学习维度先固定成 desktop。
+const SPEECH_SCOPE = 'desktop'
+
+async function resolveSpeech(text, keep) {
+  try {
+    await window.pet.resolveSpeechHabit(SPEECH_SCOPE, text, keep === true)
+    await refreshSpeechHabits()
+    showSaved()
+  } catch {
+    showToast(t('speech.failed'))
+  }
+}
+
+function renderSpeechChips(container, items, canKeep) {
+  if (container === null) return
+  container.replaceChildren()
+  if (items.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'section-note speech-empty'
+    empty.textContent = canKeep ? t('speech.emptyPending') : t('speech.emptyAdopted')
+    container.append(empty)
+    return
+  }
+  for (const item of items) {
+    const chip = document.createElement('span')
+    chip.className = 'speech-chip'
+
+    const label = document.createElement('span')
+    label.className = 'speech-chip-text'
+    label.textContent = item.text
+    chip.append(label)
+
+    const count = document.createElement('span')
+    count.className = 'speech-chip-count'
+    count.textContent = String(item.count ?? 0)
+    chip.append(count)
+
+    if (canKeep) {
+      const keep = document.createElement('button')
+      keep.type = 'button'
+      keep.className = 'speech-chip-action'
+      keep.textContent = t('speech.keep')
+      keep.onclick = () => void resolveSpeech(item.text, true)
+      chip.append(keep)
+    }
+
+    const drop = document.createElement('button')
+    drop.type = 'button'
+    drop.className = 'speech-chip-action is-quiet'
+    drop.textContent = t('speech.drop')
+    drop.onclick = () => void resolveSpeech(item.text, false)
+    chip.append(drop)
+
+    container.append(chip)
+  }
+}
+
+async function refreshSpeechHabits() {
+  const adoptedBox = $('speech-adopted')
+  const pendingBox = $('speech-pending')
+  if (adoptedBox === null || pendingBox === null) return
+  try {
+    const data = await window.pet.listSpeechHabits(SPEECH_SCOPE)
+    const toggle = $('speech-learning-enabled')
+    if (toggle !== null) toggle.checked = data?.learning !== false
+    renderSpeechChips(adoptedBox, data?.adopted ?? [], false)
+    renderSpeechChips(pendingBox, data?.pending ?? [], true)
+  } catch {
+    adoptedBox.replaceChildren()
+    pendingBox.replaceChildren()
+    showToast(t('speech.failed'))
+  }
+}
+
+function bindSpeechPanel() {
+  const toggle = $('speech-learning-enabled')
+  if (toggle === null || toggle.dataset.bound === '1') return
+  toggle.dataset.bound = '1'
+  toggle.onchange = async () => {
+    try {
+      await window.pet.setSpeechLearning(toggle.checked)
+      showSaved()
+    } catch {
+      toggle.checked = !toggle.checked
+      showToast(t('speech.failed'))
+    }
   }
 }
 
@@ -483,7 +594,18 @@ const DEFAULT_PATCH = {
     cloud: { baseUrl: '', voice: '' },
     volume: 1,
     maxChars: 60,
-    minIntervalSeconds: 8
+    minIntervalSeconds: 8,
+    // 「DSH 语音」：四个场景各管一段，互不牵连，默认全关。
+    dshScenes: { reply: false, wakeWord: false, autonomous: false, moments: false },
+    readDsh: false
+  },
+  // 四条轴：默认全开、灵敏度正常；关掉一条就整段不注入。
+  'companion.axes': {
+    relation: { enabled: true, sensitivity: 'normal' },
+    friction: { enabled: true, sensitivity: 'normal' },
+    body: { enabled: true, sensitivity: 'normal' },
+    memory: { enabled: true, sensitivity: 'normal' },
+    proactive: { enabled: true, sensitivity: 'normal' }
   },
   'companion.memory': { enabled: false, maxItems: 500 },
   'companion.persona': { enabled: true, extraPrompt: '', sections: {} },
@@ -529,6 +651,12 @@ const DEFAULT_PATCH = {
     screen: { enabled: false, consentAsked: false }
   },
   balance: { threshold: 20, intervalMinutes: 30 },
+  mail: {
+    defaultRecipient: '',
+    fromName: '昔涟',
+    smtp: { host: '', port: 465, user: '', pass: '' }
+  },
+  browse: { enabledWrites: [], maxCoinsPerAction: 2 },
   channels: {
     qq: {
       enabled: false,
@@ -611,7 +739,7 @@ const MODULE_RESETS = [
     ]
   },
   {
-    group: 'talk',
+    group: 'self',
     panel: 'connection',
     keys: ['voice', 'locale', 'companion.chat', 'wakeWords']
   },
@@ -620,14 +748,18 @@ const MODULE_RESETS = [
     panel: 'proactive',
     keys: ['presence', 'companion.care', 'companion.body']
   },
+  { group: 'company', panel: 'axes', keys: ['companion.axes'] },
   { group: 'memory', panel: 'memory', keys: ['companion.memory'] },
-  { group: 'ability', panel: 'ability', keys: ['modules', 'balance'] },
+  { group: 'ability', panel: 'ability', keys: ['modules', 'balance', 'mail', 'browse'] },
   {
     group: 'system',
     panel: 'account',
     keys: ['channels', 'askHandling', 'askEveryMinutes']
   }
 ]
+
+/** 四条轴与插件侧 AXIS_KEYS 保持一致；改这里之前先看 lib/companion/index.mjs。 */
+const AXIS_KEYS = ['relation', 'friction', 'body', 'memory', 'proactive']
 
 /** 把某一分组的设置恢复成默认；只改设置，不碰聊天记录与记忆内容。 */
 async function resetModule(button) {
@@ -1105,6 +1237,18 @@ async function loadSettings() {
   renderRangeLabel('bubble-fontSize', bubble.fontSize ?? 14.5, 1)
   $('bubble-radius').value = String(bubble.radius ?? 10)
   renderRangeLabel('bubble-radius', bubble.radius ?? 10, 0)
+  /* 停留时长两个滑杆：控件在才填。缺了也直接往下走，
+     免得一个 TypeError 把后面 HUD、模块、配色的填充一起带走。 */
+  const holdControl = $('bubble-holdSeconds')
+  if (holdControl !== null) {
+    holdControl.value = String(bubble.holdSeconds ?? 8)
+    renderRangeLabel('bubble-holdSeconds', bubble.holdSeconds ?? 8, 0)
+  }
+  const noticeControl = $('bubble-noticeHoldSeconds')
+  if (noticeControl !== null) {
+    noticeControl.value = String(bubble.noticeHoldSeconds ?? 10)
+    renderRangeLabel('bubble-noticeHoldSeconds', bubble.noticeHoldSeconds ?? 10, 0)
+  }
   $('bubble-alpha').value = String(bubble.alpha ?? 0.92)
   renderRangeLabel('bubble-alpha', bubble.alpha ?? 0.92, 2)
   $('bubble-width').value = String(bubble.width ?? 300)
@@ -1145,10 +1289,22 @@ async function loadSettings() {
   // 本地合成：地址只连回环，参考音频空着就静默不出声。
   $('voice-local-url').value = voice.localUrl ?? 'http://127.0.0.1:9880'
   $('voice-ref-audio').value = voice.refAudioPath ?? ''
+  const promptTextEl = $('voice-prompt-text')
+  if (promptTextEl !== null) promptTextEl.value = voice.promptText ?? ''
   $('voice-volume').value = String(voice.volume ?? 1)
   renderRangeLabel('voice-volume', voice.volume ?? 1, 2)
   $('voice-max-chars').value = String(voice.maxChars ?? 60)
   $('voice-min-interval').value = String(voice.minIntervalSeconds ?? 8)
+  // 四个场景各点各的灯；老配置里只有 readDsh，第一盏灯替它亮起来。
+  const dshScenes = { reply: false, wakeWord: false, autonomous: false, moments: false, ...(voice.dshScenes ?? {}) }
+  if (dshScenes.reply !== true && voice.readDsh === true) dshScenes.reply = true
+  $('voice-dsh-reply').checked = dshScenes.reply === true
+  $('voice-dsh-wake').checked = dshScenes.wakeWord === true
+  $('voice-dsh-autonomous').checked = dshScenes.autonomous === true
+  $('voice-dsh-moments').checked = dshScenes.moments === true
+  $('voice-wake-words').value = Array.isArray(voice.voiceWakeWords)
+    ? voice.voiceWakeWords.join('、')
+    : ''
 
   // 语言
   $('locale').value = current.locale ?? 'zh-CN'
@@ -1163,6 +1319,8 @@ async function loadSettings() {
   $('presence-ai-enabled').checked = presence.aiEnabled === true
   $('presence-interval').value = String(presence.intervalMinutes ?? 45)
   $('presence-city').value = presence.city ?? ''
+  $('presence-owner-city').value = presence.ownerCity ?? ''
+  $('presence-owner-autolocate').checked = presence.ownerAutoLocate !== false
   $('presence-daily-cap').value = String(presence.dailyCap ?? 8)
   $('presence-silence-days').value = String(presence.silenceDays ?? 7)
   // 默认开着天气：这是「结合此刻」里最直观的一项。
@@ -1218,6 +1376,16 @@ async function loadSettings() {
   if (expressionGroup !== null) expressionGroup.value = expressionConfig.group ?? 'off'
   if (needsEnabled !== null) needsEnabled.checked = needs.enabled === true
 
+  // 四条轴：没配过按「开、正常」显示，不把缺省值写进界面。
+  const axesConfig = companion.axes ?? {}
+  for (const key of AXIS_KEYS) {
+    const axis = axesConfig[key] ?? {}
+    const enabledInput = $(`axis-${key}-enabled`)
+    const sensitivitySelect = $(`axis-${key}-sensitivity`)
+    if (enabledInput !== null) enabledInput.checked = axis.enabled !== false
+    if (sensitivitySelect !== null) sensitivitySelect.value = axis.sensitivity ?? 'normal'
+  }
+
   // 记忆
   const memory = companion.memory ?? {}
   $('memory-enabled').checked = memory.enabled === true
@@ -1258,6 +1426,8 @@ async function loadSettings() {
   // QQ：凭据本体在 Vault，这里只回显 appId、主人名单与传输方式。
   const qq = current.channels?.qq ?? {}
   $('qq-enabled').checked = qq.enabled === true
+  $('qq-privacy-mode').checked = qq.privacyMode !== false
+  $('memory-privacy-mode').checked = qq.privacyMode !== false
   $('qq-imitate-format').checked = qq.imitateFormat !== false
   $('qq-transport').value = qq.transport === 'webhook' ? 'webhook' : 'gateway'
   updateQqTransportVisibility()
@@ -1538,7 +1708,8 @@ async function refreshMemoryFacts() {
       preference: t('memory.factKindPreference'),
       person: t('memory.factKindPerson'),
       project: t('memory.factKindProject'),
-      promise: t('memory.factKindPromise')
+      promise: t('memory.factKindPromise'),
+      knowledge: t('memory.factKindKnowledge')
     }
     for (const item of items) {
       const row = document.createElement('div')
@@ -1966,7 +2137,85 @@ async function refreshCareStatus() {
   }
 }
 
-const PERSONA_SECTIONS = ['identity', 'lore', 'worldview', 'lifeview', 'values', 'manner', 'style']
+// 七个核心段落 + 三个补充维度。核心七段在 settings.html 里是静态节点，
+// 三个补充维度（persona.mjs 的 EXTRA_SECTIONS）由 ensurePersonaExtraFields()
+// 动态注入，注入必须先于 loadSettings() 的字段回填。
+const PERSONA_SECTIONS = [
+  'identity',
+  'lore',
+  'worldview',
+  'lifeview',
+  'values',
+  'manner',
+  'style',
+  'relationPosture',
+  'repair',
+  'limits'
+]
+
+/** 三个补充维度的中文标签：i18n 词典里没有这些键，先在这里兜底。 */
+const PERSONA_EXTRA_LABELS = {
+  relationPosture: '关系姿态',
+  repair: '冲突与修复',
+  limits: '知识边界'
+}
+const PERSONA_EXTRA_KEYS = Object.keys(PERSONA_EXTRA_LABELS)
+
+function personaExtraLabel(key) {
+  const localized = window.PetI18n?.t?.(`persona.section.${key}`, current?.locale ?? 'zh-CN')
+  return typeof localized === 'string' && localized !== `persona.section.${key}`
+    ? localized
+    : PERSONA_EXTRA_LABELS[key]
+}
+
+/**
+ * 把三个补充维度的编辑框动态挂进人格区（七个核心段落之后）。
+ *
+ * 本次重构只允许改 settings.js，settings.html 的静态七段动不了；
+ * 这里按现有七段的 DOM 结构（.item.item-stack + textarea + 字数 + 恢复默认）
+ * 原样复制一份，读写路径与七段完全一致：settings.companion.persona.sections[key]。
+ * 默认文案不写死：留空即用 persona.mjs 里的默认补充维度。
+ */
+function ensurePersonaExtraFields() {
+  const anchor = personaField('style')?.closest('.item')
+  if (anchor === null || personaField('relationPosture') !== null) return
+  for (const key of PERSONA_EXTRA_KEYS) {
+    const item = document.createElement('div')
+    item.className = 'item item-stack'
+
+    const text = document.createElement('div')
+    text.className = 'item-text'
+    const label = document.createElement('div')
+    label.className = 'item-label'
+    label.textContent = personaExtraLabel(key)
+    const hint = document.createElement('div')
+    hint.className = 'item-hint'
+    hint.textContent = '留空则跟随默认；改了就整段替换'
+    text.append(label, hint)
+
+    const field = document.createElement('textarea')
+    field.id = `persona-section-${key}`
+    field.rows = 4
+    field.maxLength = 1200
+    field.spellcheck = false
+
+    const foot = document.createElement('div')
+    foot.className = 'persona-section-foot'
+    const counter = document.createElement('span')
+    counter.className = 'char-count'
+    counter.id = `persona-section-${key}-count`
+    counter.textContent = '0 / 1200'
+    const reset = document.createElement('button')
+    reset.type = 'button'
+    reset.className = 'inline-btn'
+    reset.id = `persona-section-${key}-reset`
+    reset.textContent = '恢复默认'
+    foot.append(counter, reset)
+
+    item.append(text, field, foot)
+    anchor.after(item)
+  }
+}
 
 /** 主进程下发的默认段落；拉不到就留空，输入框仍按「留空跟随默认」处理。 */
 let personaSectionDefaults = {}
@@ -2160,8 +2409,65 @@ function bindEvents() {
     if (button === null) return
     const preset = button.dataset.theme
     applyTheme(preset)
-    void patch({ theme: { preset } })
+    void patch({ theme: { preset, slots: themeScopePatch(preset) } })
   })
+
+  /* 作用范围：勾上=跟着配色走，取消=这个位置固定成现在这套。 */
+  $('theme-scope-seg')?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-theme-slot]')
+    if (button === null) return
+    button.classList.toggle('active')
+    const preset = document.querySelector('#theme-seg button.active')?.dataset.theme ?? 'OceanBlue'
+    void patch({ theme: { slots: themeScopePatch(preset) } })
+  })
+
+  /* 聊天页背景：图片本体留在主进程，这里只显示当前在用哪一张。 */
+  function renderBackgroundState(active, total) {
+    const stateEl = $('bg-state')
+    if (stateEl === null) return
+    const id = active?.id ?? ''
+    if (id === '') {
+      stateEl.textContent = total > 0 ? '还没选，可以换回以前传过的图' : '还没有设置背景图'
+      return
+    }
+    stateEl.textContent = `正在使用 ${id}`
+  }
+
+  async function refreshBackgroundState() {
+    try {
+      const result = await window.pet.listBackgrounds()
+      renderBackgroundState(result?.active ?? {}, Array.isArray(result?.items) ? result.items.length : 0)
+    } catch {
+      const stateEl = $('bg-state')
+      if (stateEl !== null) stateEl.textContent = '读取背景状态失败'
+    }
+  }
+
+  /* 背景库有独立页：这里只留入口，导入与切换都在那一页完成。 */
+  $('open-bg-library')?.addEventListener('click', () => {
+    void window.pet.openBackgrounds?.()
+  })
+
+  $('pick-bg')?.addEventListener('click', async () => {
+    const result = await window.pet.pickBackground()
+    if (result?.ok === true) {
+      const stateEl = $('bg-state')
+      if (stateEl !== null) stateEl.textContent = `正在使用 ${result.id}`
+      return
+    }
+    const stateEl = $('bg-state')
+    if (stateEl === null) return
+    if (result?.reason === 'too-large') stateEl.textContent = '图片超过 12MB，换一张小一点的'
+    else if (result?.reason === 'unsupported') stateEl.textContent = '只支持 PNG / JPG / GIF / WebP / AVIF'
+    else if (result?.reason !== 'canceled') stateEl.textContent = '这张图没读进来，换一张试试'
+  })
+
+  $('clear-bg')?.addEventListener('click', async () => {
+    await window.pet.clearBackground()
+    renderBackgroundState({ id: '' }, 0)
+  })
+
+  void refreshBackgroundState()
 
   $('profile').addEventListener('change', () => {
     const value = $('profile').value
@@ -2217,9 +2523,15 @@ function bindEvents() {
     ['bubble-width', 'width', 0],
     ['bubble-stickerSize', 'stickerSize', 0],
     ['bubble-radius', 'radius', 0],
-    ['bubble-alpha', 'alpha', 2]
+    ['bubble-alpha', 'alpha', 2],
+    ['bubble-holdSeconds', 'holdSeconds', 0],
+    ['bubble-noticeHoldSeconds', 'noticeHoldSeconds', 0]
   ]) {
-    $(id).addEventListener('input', (event) => {
+    /* 控件缺席时跳过，不要让一个 id 找不到就抛 TypeError 打断整段绑定 ——
+       这里一断，后面配色、作用范围那些监听全都注册不上，表现就是主题「失控」。 */
+    const control = $(id)
+    if (control === null) continue
+    control.addEventListener('input', (event) => {
       renderRangeLabel(id, event.target.value, digits)
       if (id.startsWith('bubble-')) renderBubblePreview()
     })
@@ -2299,6 +2611,13 @@ function bindEvents() {
   $('voice-ref-audio').addEventListener('change', () => {
     void patch({ voice: { refAudioPath: $('voice-ref-audio').value.trim() } })
   })
+
+  const voicePromptTextEl = $('voice-prompt-text')
+  if (voicePromptTextEl !== null) {
+    voicePromptTextEl.addEventListener('change', () => {
+      void patch({ voice: { promptText: voicePromptTextEl.value.trim() } })
+    })
+  }
 
   // 选择参考音频：主进程只弹框回路径，选中后立刻落盘，取消就保持原值。
   $('voice-ref-audio-pick')?.addEventListener('click', async () => {
@@ -2619,6 +2938,28 @@ function bindEvents() {
     void patch({ voice: { minIntervalSeconds: Number($('voice-min-interval').value) } })
   })
 
+  // 语音唤醒词是独立一份名单：留空时回落到内置的「发句语音」。
+  $('voice-wake-words').addEventListener('change', () => {
+    const words = $('voice-wake-words')
+      .value.split(/[、,，;；\s]+/)
+      .map((word) => word.trim())
+      .filter((word) => word !== '')
+    void patch({ voice: { voiceWakeWords: words } })
+  })
+
+  const dshSceneInputs = {
+    'voice-dsh-reply': 'reply',
+    'voice-dsh-wake': 'wakeWord',
+    'voice-dsh-autonomous': 'autonomous',
+    'voice-dsh-moments': 'moments'
+  }
+  for (const [elementId, scene] of Object.entries(dshSceneInputs)) {
+    $(elementId).addEventListener('change', (event) => {
+      // 顺手清掉旧字段，免得 readDsh 那颗旧灯一直把 reply 顶亮。
+      void patch({ voice: { readDsh: false, dshScenes: { [scene]: event.target.checked === true } } })
+    })
+  }
+
   // 语言
   $('locale').addEventListener('change', () => {
     void patch({ locale: $('locale').value })
@@ -2640,6 +2981,14 @@ function bindEvents() {
 
   $('presence-city').addEventListener('change', () => {
     void patch({ presence: { city: $('presence-city').value.trim() } })
+  })
+
+  $('presence-owner-city').addEventListener('change', () => {
+    void patch({ presence: { ownerCity: $('presence-owner-city').value.trim() } })
+  })
+
+  $('presence-owner-autolocate').addEventListener('change', () => {
+    void patch({ presence: { ownerAutoLocate: $('presence-owner-autolocate').checked } })
   })
 
   // 0 表示不限次数；填错或留空时按默认值存，避免把闸门关死又不自知。
@@ -2842,6 +3191,21 @@ function bindEvents() {
     })
   }
 
+  // 记忆观察台已并入「她·观察台」：统一落到记忆 tab，不再单开 memory.html。
+  $('open-memory-console')?.addEventListener('click', () => {
+    void window.pet?.openInsight?.('memory')
+  })
+
+  // 四条轴：开关与灵敏度分开写回，只改当前这一条，不碰旁边的轴。
+  for (const key of AXIS_KEYS) {
+    $(`axis-${key}-enabled`)?.addEventListener('change', (event) => {
+      void patch({ companion: { axes: { [key]: { enabled: event.target.checked } } } })
+    })
+    $(`axis-${key}-sensitivity`)?.addEventListener('change', (event) => {
+      void patch({ companion: { axes: { [key]: { sensitivity: event.target.value } } } })
+    })
+  }
+
   // 记忆
   $('memory-enabled').addEventListener('change', () => {
     void patch({ companion: { memory: { enabled: $('memory-enabled').checked } } })
@@ -3031,7 +3395,7 @@ function bindEvents() {
     }
     const agreed = confirmAction({
       message:
-        '打开后，她会在桌面本机、有由头的时候偶尔靠近一点；群聊和 QQ 不会触发。要打开吗？'
+        '打开后，她会在桌面本机、有由头的时候偶尔靠近一点；QQ 私聊要另外在观察台逐个打开，群聊不会触发。要打开吗？'
     })
     if (agreed !== true) {
       toggle.checked = false
@@ -3065,7 +3429,8 @@ function bindEvents() {
     void renderPersonaPreview()
   })
 
-  // 人格六段：输入时只更新字数，失焦或回车结束后落盘；恢复默认写空串继续跟随默认。
+  // 人格编辑（七个核心段落 + 三个补充维度）：输入时只更新字数，失焦或回车结束后落盘；
+  // 恢复默认写空串继续跟随默认。
   for (const key of PERSONA_SECTIONS) {
     const field = personaField(key)
     if (field === null) continue
@@ -3161,6 +3526,45 @@ function bindEvents() {
   }
 
   void refreshGameEntry()
+
+  // 哔哩哔哩：登录态只读展示（有没有 SESSDATA），扫码登录与首页都复用陪看窗
+  // （persist:cyrene-bili 独立分区）。在陪看窗里扫码登录后，切回设置窗触发
+  // focus 事件，状态自动刷新，不用重启。
+  async function refreshBiliEntry() {
+    const node = $('bili-login-status')
+    if (node === null) return
+
+    if (typeof window.pet?.biliLoginStatus !== 'function') {
+      node.textContent = '当前版本没有 B 站模块。'
+      return
+    }
+
+    try {
+      const status = await window.pet.biliLoginStatus()
+      node.textContent = status?.loggedIn === true ? '已登录' : '未登录 · 可点右侧「扫码登录」'
+    } catch (error) {
+      node.textContent = `读取失败：${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+
+  $('bili-open-login')?.addEventListener('click', async () => {
+    try {
+      await window.pet.biliOpen('https://passport.bilibili.com/login')
+    } catch (error) {
+      window.alert(`打开登录页失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
+  $('bili-open-home')?.addEventListener('click', async () => {
+    try {
+      await window.pet.biliOpen('https://www.bilibili.com')
+    } catch (error) {
+      window.alert(`打开 B 站失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
+  window.addEventListener('focus', () => void refreshBiliEntry())
+  void refreshBiliEntry()
   void refreshQqStatus()
   // 状态只在主进程真实变化后更新，轮询只读，不会触发重连。
   setInterval(() => {
@@ -3235,6 +3639,37 @@ function bindEvents() {
   }
   $('qq-enabled')?.addEventListener('change', (event) => {
     void saveQq({ enabled: event.target.checked === true })
+  })
+  /* 记忆隐私模式：记忆面板与账号面板各一个开关，读写同一份 state，两处互相同步 */
+  const applyPrivacyMode = (checked, source) => {
+    if (checked === true) {
+      $('qq-privacy-mode').checked = true
+      $('memory-privacy-mode').checked = true
+      void saveQq({ privacyMode: true })
+      return
+    }
+    source.checked = true
+    const ok = confirmAction({
+      strength: 'danger',
+      confirmWord: '关闭',
+      message: [
+        '关闭记忆隐私模式后，会同时发生这些事：',
+        '1. 群聊里每个人的发言都会并回主人这条记忆，不再按群、按发言人分开。',
+        '2. 桌面窗口的人格提示词会带上群聊与陌生私聊的内容，打开窗口就可能看见。',
+        '3. 在任何一个群里，她都可能顺势说出主人在别处说过的私事。',
+        '4. 陌生私聊的内容也会进入同一条检索，别人问起时可能被回忆出来。',
+      ].join('\n'),
+    })
+    if (ok !== true) return
+    $('qq-privacy-mode').checked = false
+    $('memory-privacy-mode').checked = false
+    void saveQq({ privacyMode: false })
+  }
+  $('qq-privacy-mode')?.addEventListener('change', (event) => {
+    applyPrivacyMode(event.target.checked === true, event.target)
+  })
+  $('memory-privacy-mode')?.addEventListener('change', (event) => {
+    applyPrivacyMode(event.target.checked === true, event.target)
   })
   $('qq-imitate-format')?.addEventListener('change', (event) => {
     void saveQq({ imitateFormat: event.target.checked === true })
@@ -3954,6 +4389,171 @@ function buildInfoLabel(app) {
   return [sha + dirty, builtAt].filter((part) => part !== '').join(' · ')
 }
 
+/* ---------------- 动作试播 / 表情试看（MEM-134）----------------
+ *
+ * 设置页原本只有气泡预览、语音试听、人格预览，没有动作 / 表情的试配入口。
+ * 参照那三处的写法补两块，都动态注入（settings.html 不允许动）：
+ *  a) 动作试播：清单来自宠物窗渲染层上报的 motion catalog（getRenderInfo().motion），
+ *     点一下试播。渲染层动作控制器只活在宠物窗口里，设置窗驱动它需要一条
+ *     「设置窗 → 主进程 → 宠物窗」转发通道；preload / main 目前都没有，
+ *     按铁律不在这里乱造 IPC 名 —— 先落到待接线清单（见本次改动报告）。
+ *  b) 表情试看：列出表情库标签，点一下让立绘临时切到该表情几秒再恢复。
+ *     同样没有现成通道，落在待接线清单。
+ */
+
+// 与 renderer/expression.mjs 的 EXPRESSION_TAGS 保持一致。
+// 设置窗与宠物窗是两个窗口、各加载各的脚本，这里 import 不到那边的模块，
+// 只能复制一份；改 expression.mjs 时记得同步这里。
+const EXPRESSION_PREVIEW_TAGS = [
+  ['neutral', '平常'],
+  ['happy', '开心'],
+  ['excited', '兴奋'],
+  ['shy', '害羞'],
+  ['gentle', '温柔'],
+  ['sad', '难过'],
+  ['angry', '生气'],
+  ['surprised', '惊讶'],
+  ['tired', '疲惫'],
+  ['thinking', '思考']
+]
+
+function buildPreviewItem({ id, label, hint, chipsId, noteId, noteText }) {
+  const item = document.createElement('div')
+  item.className = 'item item-stack'
+  item.id = id
+
+  const text = document.createElement('div')
+  text.className = 'item-text'
+  const labelNode = document.createElement('div')
+  labelNode.className = 'item-label'
+  labelNode.textContent = label
+  const hintNode = document.createElement('div')
+  hintNode.className = 'item-hint'
+  hintNode.textContent = hint
+  text.append(labelNode, hintNode)
+
+  const chips = document.createElement('div')
+  chips.id = chipsId
+  chips.style.display = 'flex'
+  chips.style.flexWrap = 'wrap'
+  chips.style.gap = '6px'
+
+  const note = document.createElement('p')
+  note.className = 'section-note'
+  note.id = noteId
+  note.textContent = noteText ?? ''
+
+  item.append(text, chips, note)
+  return item
+}
+
+/** 把两块试配 UI 挂到立绘区的「模型状态」说明下面。 */
+function ensureMotionPreviewBlocks() {
+  const anchor = $('model-status')
+  if (anchor === null || $('motion-preview-item') !== null) return
+  const motionItem = buildPreviewItem({
+    id: 'motion-preview-item',
+    label: '动作试播',
+    hint: '列出她当前模型能播的动作，点一下在桌面试播',
+    chipsId: 'motion-preview-chips',
+    noteId: 'motion-preview-note',
+    noteText: '等她登场后才会探测到动作清单'
+  })
+  const expressionItem = buildPreviewItem({
+    id: 'expression-preview-item',
+    label: '表情试看',
+    hint: '点一下让立绘临时切到该表情，几秒后恢复',
+    chipsId: 'expression-preview-chips',
+    noteId: 'expression-preview-note',
+    noteText: ''
+  })
+  // 表情标签是静态表，注入时直接铺好；动作按钮等渲染层上报后由
+  // updateMotionPreviewChips 刷新（与诊断同节奏，2 秒一拍）。
+  const expressionChips = expressionItem.querySelector('#expression-preview-chips')
+  for (const [tag, label] of EXPRESSION_PREVIEW_TAGS) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'inline-btn'
+    button.textContent = label
+    button.title = tag
+    button.addEventListener('click', () => tryPreviewExpression(tag))
+    expressionChips.append(button)
+  }
+  anchor.after(motionItem, expressionItem)
+}
+
+/** 用宠物窗上报的 motion catalog 刷新动作试播按钮；清单为空时给一句人话。 */
+function updateMotionPreviewChips(motion) {
+  const chips = $('motion-preview-chips')
+  if (chips === null) return
+  const actions = Array.isArray(motion?.actions) ? motion.actions : []
+  const labels =
+    motion?.labels !== null && typeof motion?.labels === 'object' ? motion.labels : {}
+  if (actions.length === 0) {
+    chips.replaceChildren()
+    const note = $('motion-preview-note')
+    if (note !== null) {
+      note.textContent =
+        motion === null || motion === undefined
+          ? '等她登场后才会探测到动作清单'
+          : '当前模型没有可试播的动作'
+    }
+    return
+  }
+  chips.replaceChildren()
+  for (const key of actions) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'inline-btn'
+    button.textContent =
+      typeof labels[key] === 'string' && labels[key] !== '' ? labels[key] : key
+    button.title = key
+    button.addEventListener('click', () => tryPreviewAction(key))
+    chips.append(button)
+  }
+  const note = $('motion-preview-note')
+  if (note !== null) {
+    note.textContent =
+      `动作 ${motion?.kind ?? '—'} · 自带 ${motion?.nativeCount ?? 0} · ` +
+      `参数 ${motion?.paramCount ?? 0}${motion?.pixi === true ? ' · pixi ✓' : ''}`
+  }
+}
+
+/**
+ * 试播一个动作。渲染层的动作控制器只活在宠物窗口里；设置窗驱动它需要一条
+ * 「设置窗 → 主进程 → 宠物窗」转发通道（建议 IPC 名：pet:window:action）。
+ * 目前 preload.cjs / main.mjs 都没有这条通道，按铁律不在这里造 IPC，
+ * 只把请求记进待接线清单；通道接通后实现 window.pet.playAction 即可生效。
+ */
+function tryPreviewAction(key) {
+  const playAction = window.pet?.playAction
+  if (typeof playAction === 'function') {
+    void playAction(key)
+    return
+  }
+  const note = $('motion-preview-note')
+  if (note !== null) {
+    note.textContent = `动作试播通道未接线（待接线清单：pet:window:action）· 当前选：${key}`
+  }
+}
+
+/**
+ * 表情试看：立绘临时切到该表情几秒再恢复。
+ * 同样需要一条设置窗 → 宠物窗的转发通道（建议 IPC 名：pet:window:expression，
+ * 载荷 { tag, holdMs }），preload / main 目前没有 —— 记入待接线清单。
+ */
+function tryPreviewExpression(tag) {
+  const setExpression = window.pet?.setExpression
+  if (typeof setExpression === 'function') {
+    void setExpression({ tag, holdMs: 3000 })
+    return
+  }
+  const note = $('expression-preview-note')
+  if (note !== null) {
+    note.textContent = `表情试看通道未接线（待接线清单：pet:window:expression）· 当前选：${tag}`
+  }
+}
+
 async function refreshDiagnostics() {
   // 四卡片和长表格各自独立失败：其中一项拿不到，不应拖垮另一项。
   void refreshStatusCards()
@@ -3969,6 +4569,8 @@ async function refreshDiagnostics() {
     $('diag-media').textContent = media.media ?? '未加载'
     $('diag-frames').textContent = String(media.frames ?? '—')
     $('diag-hit').textContent = String(media.hit ?? '—')
+    // 顺手把动作清单同步给立绘区的动作试播按钮（2 秒一拍，和诊断同节奏）。
+    updateMotionPreviewChips(media?.motion ?? null)
 
     const settingsNow = await window.pet.getSettings()
     const modules = Object.entries(settingsNow.modules ?? {})
@@ -4220,5 +4822,281 @@ async function clearChatHistory() {
 
 $('chat-export')?.addEventListener('click', () => void exportChatHistory())
 $('chat-clear')?.addEventListener('click', () => void clearChatHistory())
+
+/* ---------------- 人格问卷 ---------------- */
+
+/*
+ * 量表只在主进程那一份：这里不重写题库和换算系数，
+ * 只把 schema 画成题、把答案交回去算，再把结果读回来。
+ */
+let assessmentSchemaCache = null
+const assessmentAnswers = {}
+
+function assessmentQuestionRow(question, scale) {
+  const row = document.createElement('div')
+  row.className = 'assessment-q'
+
+  const text = document.createElement('p')
+  text.className = 'assessment-q-text'
+  text.textContent = question.text
+  row.append(text)
+
+  const options = document.createElement('div')
+  options.className = 'assessment-scale'
+  for (const value of [1, 2, 3, 4, 5]) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.dataset.value = String(value)
+    button.textContent = String(value)
+    button.title = scale.labels?.[value - 1] ?? String(value)
+    button.addEventListener('click', () => {
+      assessmentAnswers[question.id] = value
+      for (const peer of options.querySelectorAll('button')) {
+        peer.classList.toggle('active', Number(peer.dataset.value) === value)
+      }
+      renderAssessmentProgress()
+    })
+    options.append(button)
+  }
+  row.append(options)
+  return row
+}
+
+function renderAssessmentProgress() {
+  const total = assessmentSchemaCache?.questions?.length ?? 0
+  const answered = Object.keys(assessmentAnswers).length
+  const progress = $('assessment-progress')
+  if (progress !== null) progress.textContent = `${answered} / ${total}`
+
+  const hint = $('assessment-hint')
+  if (hint !== null) {
+    hint.textContent =
+      answered === 0
+        ? '还没有开始'
+        : answered < total
+          ? `还差 ${total - answered} 题，没答的维度不会自己补`
+          : '答完了，可以保存'
+  }
+}
+
+function renderAssessmentResult(record) {
+  const box = $('assessment-result')
+  if (box === null) return
+  box.replaceChildren()
+  if (record === null || record === undefined) return
+
+  const result = record.result ?? {}
+  const dimensions = result.dimensions ?? {}
+
+  const heading = document.createElement('h3')
+  heading.className = 'item-label'
+  heading.textContent = '这次的结果'
+  box.append(heading)
+
+  for (const dimension of assessmentSchemaCache?.dimensions ?? []) {
+    const item = dimensions[dimension.key]
+    if (item === undefined) continue
+
+    const row = document.createElement('div')
+    row.className = 'assessment-result-row'
+
+    const label = document.createElement('span')
+    label.className = 'assessment-result-label'
+    label.textContent = dimension.label
+
+    const bar = document.createElement('div')
+    bar.className = 'assessment-bar'
+    const fill = document.createElement('span')
+    fill.style.width = `${Math.max(2, Math.round(item.score))}%`
+    bar.append(fill)
+
+    const value = document.createElement('span')
+    value.className = 'assessment-result-value'
+    value.textContent =
+      item.confidence < 1
+        ? `${Math.round(item.score)}（${item.answered}/${item.total}）`
+        : String(Math.round(item.score))
+
+    row.append(label, bar, value)
+    box.append(row)
+  }
+
+  if (typeof result.personaDraft === 'string' && result.personaDraft !== '') {
+    const draft = document.createElement('p')
+    draft.className = 'section-note'
+    draft.textContent = result.personaDraft.split('\n').join(' ')
+    box.append(draft)
+  }
+
+  for (const warning of result.warnings ?? []) {
+    const line = document.createElement('p')
+    line.className = 'section-note'
+    line.textContent = warning
+    box.append(line)
+  }
+
+  const comparison = record.comparison
+  const compareLine = document.createElement('p')
+  compareLine.className = 'section-note'
+  if (comparison === null || comparison === undefined) {
+    compareLine.textContent = '这是第一次保存，之后重测会在这里显示变化。'
+  } else if (comparison.stable) {
+    compareLine.textContent = '和上次相比没有明显漂移。'
+  } else {
+    const parts = comparison.changes.map(
+      (item) => `${item.label} ${item.delta > 0 ? '+' : ''}${Math.round(item.delta)}`
+    )
+    compareLine.textContent = `和上次相比：${parts.join('，')}。`
+  }
+  box.append(compareLine)
+
+  if (typeof record.updatedAt === 'string') {
+    const at = document.createElement('p')
+    at.className = 'section-note'
+    at.textContent = `保存于 ${record.updatedAt.slice(0, 16).replace('T', ' ')}`
+    box.append(at)
+  }
+}
+
+/** 把一份已保存的记录铺回界面；传 null 就是清空草稿。 */
+function applySavedAssessment(record) {
+  for (const key of Object.keys(assessmentAnswers)) delete assessmentAnswers[key]
+  const answers = record?.answers ?? {}
+  for (const [key, value] of Object.entries(answers)) {
+    if (Number.isFinite(Number(value))) assessmentAnswers[key] = Number(value)
+  }
+
+  const container = $('assessment-questions')
+  if (container !== null) {
+    for (const row of container.querySelectorAll('.assessment-q')) {
+      const options = row.querySelector('.assessment-scale')
+      const question = options?.dataset.question ?? null
+      for (const button of row.querySelectorAll('.assessment-scale button')) {
+        button.classList.toggle(
+          'active',
+          Number(button.dataset.value) === assessmentAnswers[question]
+        )
+      }
+    }
+  }
+
+  renderAssessmentProgress()
+  renderAssessmentResult(record)
+}
+
+async function initAssessmentPanel() {
+  const container = $('assessment-questions')
+  if (container === null) return
+
+  try {
+    assessmentSchemaCache = await window.pet.getAssessmentSchema()
+  } catch (error) {
+    const hint = $('assessment-hint')
+    if (hint !== null) {
+      hint.textContent = `题库读取失败：${error instanceof Error ? error.message : String(error)}`
+    }
+    return
+  }
+
+  container.replaceChildren()
+  for (const question of assessmentSchemaCache.questions) {
+    /* 每题自己记题号，回显时不用再查全局表。 */
+    const row = assessmentQuestionRow(question, assessmentSchemaCache.scale ?? {})
+    row.querySelector('.assessment-scale').dataset.question = question.id
+    container.append(row)
+  }
+
+  try {
+    const settingsNow = await window.pet.getSettings()
+    applySavedAssessment(settingsNow?.persona?.assessment ?? null)
+  } catch {
+    renderAssessmentProgress()
+  }
+
+  $('assessment-save')?.addEventListener('click', async () => {
+    const save = $('assessment-save')
+    const hint = $('assessment-hint')
+    if (save !== null) save.disabled = true
+    try {
+      const result = await window.pet.saveAssessment({ answers: assessmentAnswers })
+      applySavedAssessment(result?.assessment ?? null)
+      showSaved()
+    } catch (error) {
+      if (hint !== null) {
+        hint.textContent = `保存失败：${error instanceof Error ? error.message : String(error)}`
+      }
+    } finally {
+      if (save !== null) save.disabled = false
+    }
+  })
+
+  $('assessment-reset')?.addEventListener('click', () => {
+    applySavedAssessment(null)
+  })
+}
+
+void initAssessmentPanel()
+
+// ---------- 设置窗底图：DSH 背景库的 settingsWindow 槽 ----------
+// 直接铺在 body 上：每张卡片各自带底色，图只在卡片之间的缝隙里透出来，
+// 不会影响可读性；没选图时把这三条内联样式清掉，回到主题自己的背景。
+const SETTINGS_BG_POLL_MS = 1500
+let settingsBgSignature = ''
+
+function readSettingsBgSlot(live) {
+  const slots = live?.background?.slots
+  const slot = slots !== null && typeof slots === 'object' ? slots.settingsWindow : null
+  if (slot === null || typeof slot !== 'object') return null
+  const id = typeof slot.id === 'string' ? slot.id : ''
+  if (id === '') return null
+  const num = (value, min, max, fallback) => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback
+  }
+  return {
+    id,
+    posX: num(slot.posX, 0, 100, 50),
+    posY: num(slot.posY, 0, 100, 50),
+    dim: num(slot.dim, 0, 0.85, 0),
+  }
+}
+
+function paintSettingsBackground(slot) {
+  const body = document.body
+  if (slot === null) {
+    body.style.backgroundImage = ''
+    body.style.backgroundPosition = ''
+    body.style.backgroundSize = ''
+    body.style.backgroundRepeat = ''
+    return
+  }
+  const url = `pet-media://background/${encodeURIComponent(slot.id)}`
+  body.style.backgroundImage =
+    `linear-gradient(rgba(255, 250, 253, ${slot.dim}), rgba(255, 250, 253, ${slot.dim})), url("${url}")`
+  body.style.backgroundPosition = `${slot.posX}% ${slot.posY}%`
+  body.style.backgroundSize = 'cover'
+  body.style.backgroundRepeat = 'no-repeat'
+}
+
+async function syncSettingsBackground() {
+  try {
+    const live = await window.pet?.pluginLive?.()
+    const slot = readSettingsBgSlot(live)
+    const signature = slot === null ? '' : `${slot.id}|${slot.posX}|${slot.posY}|${slot.dim}`
+    if (signature === settingsBgSignature) return
+    settingsBgSignature = signature
+    paintSettingsBackground(slot)
+  } catch {
+    // 插件没在跑时读不到 live.json，静默保持原样
+  }
+}
+
+void syncSettingsBackground()
+setInterval(syncSettingsBackground, SETTINGS_BG_POLL_MS)
+
+// 动态注入必须在 main() 读设置、绑事件之前完成：
+// 三个补充维度文本框要能被回填与绑定，动作 / 表情试配块要能被搜索索引到。
+ensurePersonaExtraFields()
+ensureMotionPreviewBlocks()
 
 void main()

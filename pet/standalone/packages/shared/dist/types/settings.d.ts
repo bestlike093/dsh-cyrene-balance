@@ -202,7 +202,7 @@ export interface CareSettings {
  */
 export interface IntimacySettings {
     readonly enabled: boolean;
-    /** 一天最多几次，默认按版本取（柒柒版 8、公开版 2）；设大了也只生效到 8。 */
+    /** 一天最多几次，默认按版本取（完整版 8、公开版 2）；设大了也只生效到 8。 */
     readonly perDay: number;
     /** 两次之间至少隔几小时，默认 6。 */
     readonly cooldownHours: number;

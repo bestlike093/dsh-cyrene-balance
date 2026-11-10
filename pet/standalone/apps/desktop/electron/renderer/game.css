@@ -33,6 +33,8 @@ body {
 
 .g-head {
   flex: 0 0 auto;
+  /* 游戏窗是 frameless，顶栏就是唯一的拖动把手。 */
+  -webkit-app-region: drag;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -58,6 +60,8 @@ body {
 
 .g-close {
   flex: 0 0 auto;
+  /* 顶栏整体可拖，关闭键必须显式退出拖动区。 */
+  -webkit-app-region: no-drag;
   width: 28px;
   height: 28px;
   border: 1px solid var(--accent-line);
@@ -77,12 +81,28 @@ body {
 /* ── 滚动区 ─────────────────────────────────────────── */
 
 .g-body {
-  flex: 1 1 auto;
+  /* flex-basis 取 0 而不是 auto：auto 会先按内容高度撑开，
+     窗口矮的时候滚动区就跟着内容一路长出去。 */
+  flex: 1 1 0;
+  height: 0;
+  /* flex 子项默认 min-height:auto，会按内容撑高，把滚动条挤没；
+     显式归零之后，这一块才会在窗口里收缩并自己滚。 */
+  min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px 20px 24px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* 卡片不参与 flex 收缩：.g-card 的 overflow:hidden 会把它的自动最小高度归零，
+   窗口一矮，一排卡片就被等比压扁、内容被各自裁掉，滚动区反而「没有内容可滚」，
+   滚动条消失、滚轮失效 —— 这就是「看不全又不能滑动」的来源。
+   钉死自然高度后，超出的部分才会交回 .g-body 自己的滚动条。 */
+.g-body > * {
+  flex-shrink: 0;
 }
 
 .g-body::-webkit-scrollbar {

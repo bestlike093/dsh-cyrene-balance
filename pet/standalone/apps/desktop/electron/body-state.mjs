@@ -10,6 +10,7 @@
  * 这样桌面端、QQ 和内置模块读到的是同一套身体，不再各写一份阈值。
  */
 import fs from 'node:fs/promises'
+import path from 'node:path'
 
 import {
   BodyRuntime,
@@ -56,6 +57,8 @@ export function createBodyService({
   let loaded = false
   let loading = null
   let saveTimer = null
+  /** 读取失败且坏文件无法隔离时置真：禁止写盘，绝不覆盖证据。 */
+  let writesBlocked = false
 
   async function ready() {
     if (loaded) return runtime.toJSON()
@@ -71,7 +74,19 @@ export function createBodyService({
           )
         }
       } catch (error) {
-        if (error?.code !== 'ENOENT') log('身体状态读取失败，从默认值开始', error)
+        if (error?.code === 'ENOENT') {
+          // 第一次运行：没有文件是正常状态。
+        } else {
+          log('身体状态读取失败，从默认值开始', error)
+          // 读坏的文件先隔离改名：既保留证据，也避免防抖写盘用默认值覆盖它。
+          try {
+            await fs.rename(file, `${file}.corrupt-${now()}`)
+            log('损坏的身体状态文件已隔离，下次写入另起新文件')
+          } catch (moveError) {
+            writesBlocked = true
+            log('损坏文件无法改名，已禁止写入以避免覆盖证据', moveError)
+          }
+        }
       } finally {
         loaded = true
         loading = null
@@ -83,7 +98,7 @@ export function createBodyService({
   }
 
   function scheduleSave() {
-    if (file === null || saveTimer !== null) return
+    if (file === null || writesBlocked || saveTimer !== null) return
     saveTimer = setTimeout(() => {
       saveTimer = null
       void persist()
@@ -92,10 +107,13 @@ export function createBodyService({
   }
 
   async function persist() {
-    if (file === null) return
+    if (file === null || writesBlocked) return
     try {
-      await fs.mkdir(file.replace(/[\\/][^\\/]+$/, ''), { recursive: true })
-      await fs.writeFile(file, JSON.stringify(runtime.toJSON()), 'utf8')
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      // 临时文件 + rename：写一半崩溃只会留下半截 .tmp，不会毁掉正本。
+      const temp = `${file}.tmp`
+      await fs.writeFile(temp, JSON.stringify(runtime.toJSON()), 'utf8')
+      await fs.rename(temp, file)
     } catch (error) {
       log('身体状态写入失败', error)
     }

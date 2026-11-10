@@ -4,22 +4,32 @@
   "description": "昔涟桌面桌宠（DeepSeek Harness 版）：Live2D 立绘、透明置顶窗口、拖拽贴边、点击穿透、气泡台词、DeepSeek 余额、系统状态面板、右键菜单，并接管对话提问 / 风险审批 / 任务进程；也可以切成无立绘的卡片模式",
   "type": "module",
   "main": "lib/index.js",
-  "author": "旅人 (bestlike093)",
+  "author": "bestlike093",
   "contributors": [
-    "旅人 <https://github.com/bestlike093>"
+    "bestlike093 <https://github.com/bestlike093>"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bestlike093/dsh-cyrene-balance.git"
+    "url": "git+https://github.com/bestlike093/cyrene-pet-core.git"
   },
-  "homepage": "https://github.com/bestlike093/dsh-cyrene-balance#readme",
+  "homepage": "https://github.com/bestlike093/cyrene-pet-core#readme",
   "bugs": {
-    "url": "https://github.com/bestlike093/dsh-cyrene-balance/issues"
+    "url": "https://github.com/bestlike093/cyrene-pet-core/issues"
   },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./kernel": "./lib/index.js",
+    "./memory": "./lib/domains/memory.js",
+    "./companion": "./lib/domains/companion.js",
+    "./body": "./lib/domains/body.js",
+    "./proactive": "./lib/domains/proactive.js",
+    "./voice": "./lib/domains/voice.js",
+    "./qq": "./lib/domains/qq.js",
+    "./wechat": "./lib/domains/wechat.js",
+    "./live": "./lib/domains/live.js",
+    "./tools": "./lib/domains/tools.js"
   },
   "files": [
     "lib",
@@ -49,7 +59,10 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "inject": [],
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ],
       "platform": "web",
       "immediately": true
     },
@@ -69,5 +82,8 @@
         "network:api.deepseek.com"
       ]
     }
+  },
+  "dependencies": {
+    "silk-wasm": "^3.7.1"
   }
 }

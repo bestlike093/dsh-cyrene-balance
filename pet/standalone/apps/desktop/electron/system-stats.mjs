@@ -6,8 +6,9 @@
  *   内存  —— os.totalmem / os.freemem，跟 CPU 同一拍
  *   网速  —— PowerShell 读网卡累计字节，两次差值除以间隔
  *   电量  —— PowerShell 读 Win32_Battery，台式机没有就返回 null
- *   GPU   —— 型号取 app.getGPUInfo('basic')；利用率尝试 nvidia-smi，
- *            没有就返回 null，界面写「—」，不伪造数字
+ *   GPU   —— 型号取 app.getGPUInfo('basic')；利用率先试 nvidia-smi，连续失败 N 次
+ *           才切 Windows 性能计数器（AMD / Intel 核显也读得到），之后每隔 10 分钟
+ *           重试一次 nvidia-smi、成功即切回；两条路都不通才返回 null，界面写「—」
  *
  * PowerShell 脚本是常量字符串，不拼接任何用户输入，也不接收参数。
  * 任何一项失败都只影响这一项，不影响其它指标，更不会抛到主流程。
@@ -27,6 +28,11 @@ const SCRIPT_TIMEOUT_MS = 8000
 
 /** 采样失败后多久再试，避免每拍都拉起一个进程。 */
 const RETRY_AFTER_MS = 30_000
+
+/** nvidia-smi 连续失败多少次才切 perfmon 兜底，避免一次抖动就永久降级。 */
+const GPU_NVIDIA_FAIL_LIMIT = 3
+/** 切到 perfmon 后，每隔这么久重试一次 nvidia-smi，成功就切回。 */
+const GPU_RETRY_NVIDIA_MS = 10 * 60 * 1000
 
 /**
  * 固定脚本：输出 `接收字节|发送字节|电量|电池状态`，缺失项留空。
@@ -55,8 +61,34 @@ export function chargingFromStatus(status) {
   return null
 }
 
-/** NVIDIA 显卡利用率；没有 nvidia-smi 时返回 null。 */
-const GPU_SCRIPT = 'nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits'
+/** NVIDIA 显卡利用率。装了 nvidia-smi 的机器走这条，最快也最准。 */
+const GPU_SCRIPT_NVIDIA =
+  'nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits'
+
+/**
+ * 通用回退：Windows 性能计数器。AMD、Intel 核显、没装 NVIDIA 驱动工具的机器都靠它。
+ *
+ * 任务管理器的 GPU 利用率读的就是 '\GPU Engine(*)\Utilization Percentage' 这组计数器。
+ * 它是原始累计值，单次采样拿到的是 0，必须采两次让 PDH 自己算差值，所以用
+ * -SampleInterval 1 -MaxSamples 2；整个调用约 2.5 秒，仍在 SCRIPT_TIMEOUT_MS 内。
+ *
+ * 实例非常多（本机 668 个，每进程每引擎各一条），只取 3D 引擎那批求和再夹到 100，
+ * 量级与任务管理器一致（本机实测 SUM=45 / 单实例 MAX=20.1）。
+ * 一条 3D 实例都没有时退回全部实例，免得某些驱动只暴露 VideoDecode 之类的引擎。
+ *
+ * 脚本是常量字符串，不拼接任何外部输入。
+ */
+const GPU_SCRIPT_PERFMON = [
+  "$ErrorActionPreference='SilentlyContinue'",
+  "$s=Get-Counter '\\GPU Engine(*)\\Utilization Percentage' -SampleInterval 1 -MaxSamples 2",
+  'if(-not $s -or $s.Count -lt 2){exit 1}',
+  '$last=$s[$s.Count-1].CounterSamples',
+  "$d=$last | Where-Object { $_.InstanceName -like '*engtype_3d*' }",
+  'if(-not $d){$d=$last}',
+  '$v=($d | Measure-Object -Property CookedValue -Sum).Sum',
+  'if(-not $v){$v=0}',
+  '[int][math]::Round([math]::Min(100,$v))'
+].join('; ')
 
 function runPowerShell(script) {
   return new Promise((resolve) => {
@@ -130,12 +162,25 @@ export function createSystemStats({ app, onStats, log = () => {} }) {
   let previousCpu = null
   let previousNet = null
   let lastSlowAt = 0
+  /** 网速 / 电量的失败退避。 */
   let slowBlockedUntil = 0
+  /** GPU 自己的失败退避：与网速电量分开计时，一头的失败不会误伤另一头。 */
+  let gpuBlockedUntil = 0
 
   let net = { downBps: null, upBps: null }
   let battery = { percent: null, charging: null }
   let gpu = { name: '', percent: null }
   let gpuReadAt = 0
+  /**
+   * 利用率读法：默认 'nvidia'，连续失败 GPU_NVIDIA_FAIL_LIMIT 次才切 'perfmon'。
+   * 切过去不是永久的：每 GPU_RETRY_NVIDIA_MS 重试一次 nvidia-smi，成功就切回，
+   * 驱动更新 / 游戏退出后还能回到更准的那条路。
+   */
+  let gpuMode = 'nvidia'
+  /** nvidia-smi 连续失败计数，攒够上限才切 perfmon。 */
+  let nvidiaFailCount = 0
+  /** 切到 perfmon 的时刻，用来算下一次 nvidia 重试。 */
+  let gpuModeSwitchedAt = 0
 
   let latest = {
     cpuPercent: null,
@@ -159,21 +204,53 @@ export function createSystemStats({ app, onStats, log = () => {} }) {
     }
   }
 
-  /** GPU 利用率：6 秒缓存，读不到就保持 null，30 秒后再试。 */
+  /** GPU 利用率：6 秒缓存，两条路都读不到才保持 null，用自己的退避计时。 */
   async function readGpuPercent() {
     const now = Date.now()
     if (now - gpuReadAt < SLOW_INTERVAL_MS) return
-    if (now < slowBlockedUntil) return
+    if (now < gpuBlockedUntil) return
     gpuReadAt = now
 
-    const output = await runPowerShell(GPU_SCRIPT)
-    if (output === null || output === '') {
+    let output = null
+    // perfmon 模式下也定期重试 nvidia-smi：驱动装回来 / 游戏退出后能自己切回更准的路子。
+    const tryNvidia =
+      gpuMode === 'nvidia' ||
+      (gpuMode === 'perfmon' && now - gpuModeSwitchedAt >= GPU_RETRY_NVIDIA_MS)
+    if (tryNvidia) {
+      output = await runPowerShell(GPU_SCRIPT_NVIDIA)
+      if (output === null || output.trim() === '') {
+        // 一次失败不立刻放弃：攒够连续失败次数才切，防止偶尔抖动把 nvidia 永久废掉。
+        nvidiaFailCount += 1
+        if (gpuMode === 'nvidia' && nvidiaFailCount >= GPU_NVIDIA_FAIL_LIMIT) {
+          gpuMode = 'perfmon'
+          gpuModeSwitchedAt = now
+        }
+        output = null
+      } else {
+        nvidiaFailCount = 0
+        gpuMode = 'nvidia'
+      }
+    }
+    if (output === null && gpuMode === 'perfmon') {
+      const fallback = await runPowerShell(GPU_SCRIPT_PERFMON)
+      if (fallback !== null && fallback.trim() !== '') output = fallback
+    }
+
+    if (output === null || output.trim() === '') {
       gpu.percent = null
-      slowBlockedUntil = now + RETRY_AFTER_MS
+      gpuBlockedUntil = now + RETRY_AFTER_MS
       return
     }
-    const value = Number.parseInt(output.split(/\r?\n/)[0]?.trim() ?? '', 10)
+    /* nvidia-smi 多卡会输出多行，取最忙那张；perfmon 只有一行。
+       取最大值而不是首行，多卡机器上才不会一直只显示固定的某一张卡。 */
+    const values = output
+      .split(/\r?\n/)
+      .map((line) => Number.parseInt(line.trim(), 10))
+      .filter((n) => Number.isFinite(n))
+    const value = values.length > 0 ? Math.max(...values) : Number.NaN
     gpu.percent = Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : null
+    // 有输出但解析不出数字，同样要退避，否则每拍都白跑 2.5 秒的计数器采样。
+    if (!Number.isFinite(value)) gpuBlockedUntil = now + RETRY_AFTER_MS
   }
 
   /** 网速与电量：共用一次 PowerShell，失败则整体置空并退避。 */

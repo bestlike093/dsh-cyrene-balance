@@ -73,9 +73,28 @@ export function cosineSimilarity(left, right) {
   return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm))
 }
 
+/** 纯日期（2026-10-01 / 2026/10/1 / 2026.10.1），带时刻的字符串不归这里管。 */
+const DATE_ONLY = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/
+
 function parseTime(value, fallback) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
-  const stamp = Date.parse(String(value ?? ''))
+  const text = String(value ?? '').trim()
+  /*
+   * Date.parse 把纯日期按 UTC 零点解析，而 now 是本地时间戳：
+   * 东八区会把这类日期的龄期凭空多算 8 小时。
+   * 纯日期改成本地零点（new Date(y, m-1, d)），和 now 的口径一致。
+   */
+  const dateOnly = text.match(DATE_ONLY)
+  if (dateOnly !== null) {
+    const year = Number(dateOnly[1])
+    const month = Number(dateOnly[2])
+    const day = Number(dateOnly[3])
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const local = new Date(year, month - 1, day).getTime()
+      if (Number.isFinite(local)) return local
+    }
+  }
+  const stamp = Date.parse(text)
   return Number.isFinite(stamp) ? stamp : fallback
 }
 
@@ -167,10 +186,12 @@ export function rankMemories(query, items, options = {}) {
       const reinforcement = 1 + Math.min(0.3, 0.12 * Math.log10(1 + recallCount))
       // 钉住的事额外抬一点，但不至于盖过「这一句本来就更相关」。
       const pinBoost = item.pinned === true ? 1.2 : 1
-      const score =
-        (hasVector
-          ? normalized * (1 - vectorWeight) + vectorScore * vectorWeight
-          : normalized * item._recency) * reinforcement * pinBoost
+      // 向量混合得到「像不像」之后，仍然要乘时间衰减：
+      // 旧记忆不能因为向量分高就永远压着新记忆，钉住的除外。
+      const blended = hasVector
+        ? normalized * (1 - vectorWeight) + vectorScore * vectorWeight
+        : normalized
+      const score = blended * item._recency * reinforcement * pinBoost
       return {
         ...item,
         score: Math.round(score * 10_000) / 10_000,
@@ -183,9 +204,13 @@ export function rankMemories(query, items, options = {}) {
     .sort((left, right) => right.score - left.score || right._at - left._at)
 
   // 调用方可能显式传 limit: undefined（想用默认值），不能让它把默认值覆盖成 NaN。
-  const limit = Number.isFinite(Number(config.limit))
-    ? Math.max(1, Math.floor(Number(config.limit)))
-    : DEFAULT_SEARCH.limit
+  // 显式 null 也一样按默认值：Number(null)=0 会被 Math.max 抬成 1，等于把默认 8 限成 1。
+  // 只有真有限数才用，字符串「5」这类模糊写法一律回默认值。
+  const rawLimit = config.limit
+  const limit =
+    typeof rawLimit === 'number' && Number.isFinite(rawLimit)
+      ? Math.max(1, Math.floor(rawLimit))
+      : DEFAULT_SEARCH.limit
 
   return ranked
     .slice(0, limit)

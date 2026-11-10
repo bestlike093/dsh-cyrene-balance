@@ -22,8 +22,8 @@ const SYSTEM_PROMPT = [
   '- relation 不超过 20 字，写你们现在的关系，例如「刚认识，还在试探」；',
   '- read 不超过 30 字，只写这几轮里看得出来的态度：认真、敷衍、开玩笑、烦躁、在试探、想被陪；看不出来就省略这个字段；',
   '- adjust 不超过 40 字，写「下次自己该怎么说」：句子长短、要不要追问、该不该撒娇、哪些话别再说；只写一条，别写成清单；',
-  '- facts 只写以后还会用到的：偏好、人物、项目、约定、被纠正过的地方；寒暄和一时情绪不要写；',
-  '- kind 只能是 preference / person / project / promise / lesson；每条不超过 40 字；',
+  '- facts 只写以后还会用到的：偏好、人物、项目、约定、被纠正过的地方、学到的知识；寒暄和一时情绪不要写；',
+  '- kind 只能是 preference / person / project / promise / lesson / knowledge；knowledge 是「对方教给你、或你从别处学到的知识」，不是对对方的看法；每条不超过 40 字；',
   '- 对方指出你说错了、不该这样说、下次要怎样时，写成 kind=lesson，text 用「对方纠正过：……」开头，不要写成辩解；',
   '- 对方改口时（「我不喜欢咖啡了」「现在换成周末」），在新 fact 里用 supersedes 抄回被推翻的旧说法原文；只是补充细节就省略这个字段；',
   '- 提及尺度分四档：随时能直说就省略；只适合放在语气里、不方便摊开说的（对方还没准备好聊、或说了会让气氛变重）写 soft_echo；涉及身体、家庭、财务、感情或别人隐私的写 on_request；对方明确说过「别跟别人讲」的写 never；',
@@ -32,47 +32,102 @@ const SYSTEM_PROMPT = [
 ].join('\n')
 
 /** 从模型输出里取 JSON；解析不了返回 null。 */
+const EVAL_KEYS = ['favor', 'impression', 'relation', 'read', 'adjust', 'facts']
+
+/**
+ * 不是拿第一个「{」到最后一个「}」硬切（说明文字里的花括号会污染范围），
+ * 而是从后往前逐个试「{」起点，用括号配平扫描切出完整对象，解析成功且
+ * 含有评估字段的才算数。
+ */
 export function extractInnerJson(raw) {
   if (typeof raw !== 'string') return null
   const text = raw.trim()
   if (text === '') return null
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text)
-  const body = fenced === null ? text : fenced[1]
-  const start = body.indexOf('{')
-  const end = body.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  try {
-    const parsed = JSON.parse(body.slice(start, end + 1))
-    return typeof parsed === 'object' && parsed !== null ? parsed : null
-  } catch {
-    return null
+  const body = (fenced === null ? text : fenced[1]).trim()
+
+  const starts = []
+  for (let i = 0; i < body.length; i += 1) {
+    if (body[i] === '{') starts.push(i)
   }
+  // 从最后一个「{」往前试：真正的 JSON 对象通常是最后出现的那一段。
+  for (let k = starts.length - 1; k >= 0; k -= 1) {
+    const start = starts[k]
+    let depth = 0
+    let inString = false
+    let escaped = false
+    let end = -1
+    for (let i = start; i < body.length; i += 1) {
+      const char = body[i]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (char === '\\') {
+          escaped = true
+        } else if (char === '"') {
+          inString = false
+        }
+        continue
+      }
+      if (char === '"') {
+        inString = true
+      } else if (char === '{') {
+        depth += 1
+      } else if (char === '}') {
+        depth -= 1
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+    if (end < 0) continue
+    try {
+      const parsed = JSON.parse(body.slice(start, end + 1))
+      if (parsed !== null && typeof parsed === 'object' && EVAL_KEYS.some((key) => parsed[key] !== undefined)) {
+        return parsed
+      }
+    } catch {
+      // 这一段不是合法 JSON，试更靠前的一个「{」。
+    }
+  }
+  return null
 }
 
 /** 只保留模型确实给出的字段，缺的不补、不猜。 */
 export function normalizeEvaluation(parsed) {
   if (parsed === null || typeof parsed !== 'object') return null
-  const favor = Number(parsed.favor)
+  // null / 空串 / 布尔值不是好感：宁可少一个字段，也绝不把「没给」读成 0 清零。
+  const favorRaw = parsed.favor
+  const favor =
+    favorRaw === null || favorRaw === undefined || typeof favorRaw === 'boolean'
+      ? NaN
+      : typeof favorRaw === 'number'
+        ? favorRaw
+        : typeof favorRaw === 'string' && favorRaw.trim() !== ''
+          ? Number(favorRaw)
+          : NaN
   const result = {}
   if (Number.isFinite(favor)) result.favor = Math.min(100, Math.max(0, Math.round(favor)))
+  // 截断上限与 SYSTEM_PROMPT 的要求一致：超出的静默收敛，不再让提示词与实现各说一套。
   if (typeof parsed.impression === 'string' && parsed.impression.trim() !== '') {
-    result.impression = parsed.impression.trim().slice(0, 120)
+    result.impression = parsed.impression.trim().slice(0, 40)
   }
   if (typeof parsed.relation === 'string' && parsed.relation.trim() !== '') {
-    result.relation = parsed.relation.trim().slice(0, 120)
+    result.relation = parsed.relation.trim().slice(0, 20)
   }
   if (typeof parsed.read === 'string' && parsed.read.trim() !== '') {
-    result.read = parsed.read.trim().slice(0, 60)
+    result.read = parsed.read.trim().slice(0, 30)
   }
   if (typeof parsed.adjust === 'string' && parsed.adjust.trim() !== '') {
-    result.adjust = parsed.adjust.trim().slice(0, 80)
+    result.adjust = parsed.adjust.trim().slice(0, 40)
   }
   const facts = Array.isArray(parsed.facts) ? parsed.facts : []
   result.facts = facts
     .filter((item) => item !== null && typeof item === 'object' && typeof item.text === 'string')
     .map((item) => {
       const fact = {
-        kind: ['preference', 'person', 'project', 'promise', 'lesson'].includes(item.kind)
+        kind: ['preference', 'person', 'project', 'promise', 'lesson', 'knowledge'].includes(item.kind)
           ? item.kind
           : 'preference',
         text: item.text.trim().slice(0, 160)
@@ -88,7 +143,13 @@ export function normalizeEvaluation(parsed) {
     })
     .filter((item) => item.text !== '')
     .slice(0, 8)
-  if (result.favor === undefined && result.impression === undefined && result.relation === undefined) {
+  // 只给 facts 也是合法输出：不再把「整批事实」当成空评估丢掉。
+  if (
+    result.favor === undefined &&
+    result.impression === undefined &&
+    result.relation === undefined &&
+    result.facts.length === 0
+  ) {
     return null
   }
   return result
@@ -219,21 +280,12 @@ export function createInnerStateService(options = {}) {
           ])
 
           if (!response.ok) return { ok: false, reason: 'http', status: response.status }
-          const payload = await response.json()
+          // response.json() 也纳入超时：响应头到了、响应体卡住时同样不能把 inflight 焊死。
+          const payload = await Promise.race([response.json(), timeout])
           const raw = payload?.choices?.[0]?.message?.content ?? ''
           const evaluation = normalizeEvaluation(extractInnerJson(raw))
           if (evaluation === null) return { ok: false, reason: 'bad-json' }
 
-          relationship.applyEvaluation(
-            {
-              favor: evaluation.favor,
-              impression: evaluation.impression,
-              relation: evaluation.relation,
-              read: evaluation.read,
-              adjust: evaluation.adjust
-            },
-            key
-          )
           // 模型给的事实再过一道闸门：寒暄、临时状态、玩笑、转述和凭据不落盘。
           // 模型已经分好 kind，这里只挡明显不该记的，不拿「信息量低」误杀项目进展。
           const blocked = new Set([
@@ -247,7 +299,13 @@ export function createInnerStateService(options = {}) {
             'explicit_forget'
           ])
           const accepted = evaluation.facts
-            .filter((fact) => !blocked.has(classifyMemory(fact.text, { minLength: 3 }).reason))
+            .filter((fact) => {
+              const reason = classifyMemory(fact.text, { minLength: 3 }).reason
+              if (blocked.has(reason)) return false
+              // 「打算 / 计划」类只允许按 promise（想做）落库，当成正在做的事一律挡下。
+              if (reason === 'unfulfilled_plan' && fact.kind !== 'promise') return false
+              return true
+            })
             // 来源记成这一轮所属的会话，设置页才能说清「这条是从哪儿听来的」。
             .map((fact) => ({
               ...fact,
@@ -264,12 +322,46 @@ export function createInnerStateService(options = {}) {
               confidence: 0.9,
               source: key
             }))
-          const incoming = [...accepted, ...corrections]
-          if (incoming.length > 0 && typeof facts.upsert === 'function') {
-            facts.upsert(incoming, now(), key)
+          // 模型与规则层可能认出同一条纠正：按文本去重，不把一件事记两遍。
+          const seen = new Set()
+          const incoming = [...accepted, ...corrections].filter((fact) => {
+            const normalized = fact.text.trim().replace(/\s+/g, ' ')
+            if (normalized === '' || seen.has(normalized)) return false
+            seen.add(normalized)
+            return true
+          })
+
+          // 两个存储各自独立提交：一个失败不假装另一个也失败，
+          // 更不会因为后一步抛错让前一步悄悄回滚。
+          let factsSaved = 0
+          let factsError = null
+          try {
+            if (incoming.length > 0 && typeof facts.upsert === 'function') {
+              const saved = facts.upsert(incoming, now(), key)
+              factsSaved = Number(saved?.added ?? 0)
+            }
+          } catch (error) {
+            factsError = String(error?.message ?? error)
+            log('记忆写入失败（内心状态照常更新）', error)
+          }
+          try {
+            relationship.applyEvaluation(
+              {
+                favor: evaluation.favor,
+                impression: evaluation.impression,
+                relation: evaluation.relation,
+                read: evaluation.read,
+                adjust: evaluation.adjust
+              },
+              key
+            )
+          } catch (error) {
+            log('好感写入失败（记忆已单独落库）', error)
+            return { ok: false, reason: 'relationship-write-failed', message: String(error?.message ?? error) }
           }
           log(
             `内心状态已更新：好感 ${evaluation.favor ?? current.favor}，新记忆 ${incoming.length} 条` +
+              (factsSaved < incoming.length ? `（落库 ${factsSaved} 条${factsError !== null ? `，写入失败：${factsError}` : ''}）` : '') +
               (accepted.length < evaluation.facts.length ? `（挡下 ${evaluation.facts.length - accepted.length} 条）` : '') +
               (corrections.length > 0 ? `（纠正 ${corrections.length} 条）` : '')
           )

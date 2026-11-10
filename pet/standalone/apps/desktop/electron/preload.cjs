@@ -2,9 +2,21 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('pet', {
+  // 弹幕层专用：主进程推一条，页面就横着放一条。返回取消订阅函数。
+  onDanmaku: (handler) => {
+    if (typeof handler !== 'function') return () => {}
+    const listener = (_event, item) => handler(item)
+    ipcRenderer.on('pet:danmaku:item', listener)
+    return () => ipcRenderer.removeListener('pet:danmaku:item', listener)
+  },
   getSettings: () => ipcRenderer.invoke('pet:settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('pet:settings:save', settings),
+  getAssessmentSchema: () => ipcRenderer.invoke('pet:assessment:schema'),
+  scoreAssessment: (answers) => ipcRenderer.invoke('pet:assessment:score', answers),
+  saveAssessment: (payload) => ipcRenderer.invoke('pet:assessment:save', payload),
   setClickThrough: (enabled) => ipcRenderer.invoke('pet:window:setClickThrough', enabled),
+  // 像素级穿透：渲染层按 elementFromPoint 命中结果切换可点/穿透。
+  setPixelHit: (interactive) => ipcRenderer.invoke('pet:window:setPixelHit', interactive === true),
   setAlwaysOnTop: (enabled) => ipcRenderer.invoke('pet:window:setAlwaysOnTop', enabled),
   move: (x, y) => ipcRenderer.invoke('pet:window:move', { x, y }),
   // 一键归位：主进程把窗口贴到主屏右下角，渲染侧不用自己算多屏坐标。
@@ -13,6 +25,11 @@ contextBridge.exposeInMainWorld('pet', {
   dragStart: () => ipcRenderer.invoke('pet:window:dragStart'),
   dragEnd: (velocity) => ipcRenderer.invoke('pet:window:dragEnd', velocity),
   diagnostics: () => ipcRenderer.invoke('pet:diagnostics:collect'),
+  // 语感学习：设置页读列表、裁决待审、开关总闸。
+  listSpeechHabits: (scope) => ipcRenderer.invoke('pet:speech:list', scope),
+  resolveSpeechHabit: (scope, text, keep) =>
+    ipcRenderer.invoke('pet:speech:resolve', { scope, text, keep: keep === true }),
+  setSpeechLearning: (enabled) => ipcRenderer.invoke('pet:speech:learning', enabled === true),
   // Live2D 模型库：列表 / 当前生效模型 / 导入（zip 或文件夹）/ 切换 / 打开目录。
   // 导入会弹系统选择框，选完由主进程解压并校验，返回带 pet-media URL 的模型。
   listModels: () => ipcRenderer.invoke('pet:models:list'),
@@ -44,6 +61,14 @@ contextBridge.exposeInMainWorld('pet', {
   // 失败一律返回 ok:false，渲染侧静默跳过——没声音不该影响出字。
   // reason=manual 表示点小喇叭，不受「只在小喇叭被点时」这条设置挡。
   speakVoice: (text, reason = 'auto') => ipcRenderer.invoke('pet:voice:speak', { text, reason }),
+  // 语音输入：状态 / 配置 / 提交音频。识别与唤醒词判定都在主进程，渲染侧只负责采集。
+  asrStatus: () => ipcRenderer.invoke('pet:asr:status'),
+  asrGetConfig: () => ipcRenderer.invoke('pet:asr:config'),
+  asrSaveConfig: (patch) => ipcRenderer.invoke('pet:asr:save', patch),
+  asrTranscribe: (buffer) => ipcRenderer.invoke('pet:asr:transcribe', buffer),
+  asrMic: (action) => ipcRenderer.invoke('pet:asr:mic', action),
+  // 本机识别：info=路径与就绪状态，install=装依赖和下模型，start=起本机服务。
+  asrLocal: (action) => ipcRenderer.invoke('pet:asr:local', action),
   // 语音服务真实状态：只回 state，人话由界面按语言翻译。
   voiceStatus: () => ipcRenderer.invoke('pet:voice:status'),
   pickRefAudio: () => ipcRenderer.invoke('pet:voice:pickRefAudio'),
@@ -63,6 +88,9 @@ contextBridge.exposeInMainWorld('pet', {
   exportChat: () => ipcRenderer.invoke('pet:chat:export'),
   openChat: () => ipcRenderer.invoke('pet:chat:open'),
   closeChat: () => ipcRenderer.invoke('pet:chat:close'),
+  // 会话页：聊天历史与 QQ 会话合并在一页，tab 可选 'chat' | 'qq'。
+  openSessions: (tab) => ipcRenderer.invoke('pet:sessions:open', { tab }),
+  listQqConversations: () => ipcRenderer.invoke('pet:qq:conversations'),
   // 拍一张照：只回 { ok, photo:{ path, at, bytes } }，图像字节不进渲染层。
   takePhoto: () => ipcRenderer.invoke('pet:photo:take'),
   // 记忆：统计与分页读取；单条删除按 id 走，清空仍是整份清空。
@@ -79,6 +107,8 @@ contextBridge.exposeInMainWorld('pet', {
   // 观察台：整份只读快照；写动作只落在指定会话上，桌面与各群互不影响。
   openInsight: (tab) =>
     ipcRenderer.invoke('pet:insight:open', typeof tab === 'string' ? { tab } : {}),
+  // 记忆页作用域列表：读插件进程写出的 memory-snapshot.json，观察台只读不写。
+  getMemoryConsole: () => ipcRenderer.invoke('pet:memory-console:load'),
   // 观察台已开着时，主进程只发一条切页请求，不重新加载整页。
   onInsightTab: (callback) => {
     if (typeof callback !== 'function') return () => {}
@@ -94,6 +124,12 @@ contextBridge.exposeInMainWorld('pet', {
   lockInsightFavor: (scope, locked) =>
     ipcRenderer.invoke('pet:insight:lock-favor', { scope, locked }),
   resetInsightScope: (scope) => ipcRenderer.invoke('pet:insight:reset-scope', { scope }),
+  // 贴近时刻按会话开关：只对 QQ 私聊生效，桌面不在可改写范围内。
+  setInsightIntimacy: (scope, enabled) =>
+    ipcRenderer.invoke('pet:insight:set-intimacy', { scope, enabled }),
+  // 让某一段关系消气：只投递一条意图，真正落状态由她那边做。
+  setInsightFriction: (scope, value) =>
+    ipcRenderer.invoke('pet:insight:set-friction', { scope, value }),
   deleteInsightMemory: (id) => ipcRenderer.invoke('pet:insight:delete-memory', { id }),
   listMemory: (options) => ipcRenderer.invoke('pet:memory:list', options),
   deleteMemory: (id) => ipcRenderer.invoke('pet:memory:delete', { id }),
@@ -111,6 +147,17 @@ contextBridge.exposeInMainWorld('pet', {
   openContextMenu: (payload) => ipcRenderer.invoke('pet:menu:context', payload),
   // 独立设置窗：打开 / 关闭 / 应用尺寸 / 读实时状态。
   openSettings: (panel) => ipcRenderer.invoke('pet:settings:open', { panel }),
+  // 聊天页背景：选图、清空、列清单。图片本体只在主进程里搬，渲染侧只拿 id。
+  pickBackground: () => ipcRenderer.invoke('pet:background:pick'),
+  clearBackground: () => ipcRenderer.invoke('pet:background:clear'),
+  listBackgrounds: () => ipcRenderer.invoke('pet:background:list'),
+  // 背景库页：选用已有图、删除文件、打开独立页。
+  applyBackground: (id, slots) => ipcRenderer.invoke('pet:background:apply', id, slots),
+  removeBackground: (id) => ipcRenderer.invoke('pet:background:remove', id),
+  /* 五槽：分别给聊天窗 / 设置页 / 独立页面 / DSH 页面 / DSH 卡片设图。 */
+  backgroundSlots: () => ipcRenderer.invoke('pet:background:slots'),
+  setBackgroundSlot: (slot, patch) => ipcRenderer.invoke('pet:background:slot:set', slot, patch),
+  openBackgrounds: () => ipcRenderer.invoke('pet:background:open'),
   closeSettings: () => ipcRenderer.invoke('pet:settings:close'),
   minimizeSettings: () => ipcRenderer.invoke('pet:settings:minimize'),
   toggleMaximizeSettings: () => ipcRenderer.invoke('pet:settings:toggleMaximize'),
@@ -217,6 +264,9 @@ contextBridge.exposeInMainWorld('pet', {
   },
   ask: (request) => ipcRenderer.invoke('pet:ask', request),
   approve: (id, action, answer) => ipcRenderer.invoke('pet:approve', { id, action, answer }),
+  // 与 DSH 插件联动：读插件写的 live.json，把桌宠上的选择写回 pet-command.json。
+  pluginLive: () => ipcRenderer.invoke('pet:plugin:live'),
+  pluginCommand: (command) => ipcRenderer.invoke('pet:plugin:command', command),
   reportTask: (task) => ipcRenderer.invoke('pet:reportTask', task),
   // 能力中心要求设置窗切到某面板（例如「记忆」）。
   onSettingsPanel: (callback) => {
@@ -240,5 +290,17 @@ contextBridge.exposeInMainWorld('pet', {
     const handler = (_event, state) => callback(state)
     ipcRenderer.on('pet:lifecycle', handler)
     return () => ipcRenderer.removeListener('pet:lifecycle', handler)
-  }
+  },
+  // B 站浏览：搜索 / 详情 / 打开 / 写操作 / 读文章。写操作默认全关，危险动作二次确认。
+  biliSearch: (keyword) => ipcRenderer.invoke('pet:bili:search', { keyword }),
+  biliVideoInfo: (bvid) => ipcRenderer.invoke('pet:bili:videoInfo', { bvid }),
+  biliOpen: (url) => ipcRenderer.invoke('pet:bili:open', { url }),
+  biliWrite: (payload) => ipcRenderer.invoke('pet:bili:write', payload),
+  biliArticle: (url) => ipcRenderer.invoke('pet:bili:article', { url }),
+  biliSubtitleList: (bvid, cid) => ipcRenderer.invoke('pet:bili:subtitleList', { bvid, cid }),
+  biliTranscript: (url) => ipcRenderer.invoke('pet:bili:transcript', { url }),
+  biliLoginStatus: () => ipcRenderer.invoke('pet:bili:loginStatus'),
+  addFacts: (facts, scope) => ipcRenderer.invoke('pet:memory:addFacts', { facts, scope }),
+  // 邮件：真发信，收件人默认取设置里的默认收件人，主题正文每次填。
+  sendMail: (payload) => ipcRenderer.invoke('pet:mail:send', payload)
 })

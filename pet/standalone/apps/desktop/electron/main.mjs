@@ -20,6 +20,8 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import tls from 'node:tls'
+import { connect as tcpConnect } from 'node:net'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
@@ -80,6 +82,11 @@ import {
   proactiveLimitsFromPresence
 } from './proactive.mjs'
 import { planMemoryRecall } from './memory-intent.mjs'
+import { assertActionAllowed, assertCoinCount, needsConfirmation } from './bilibili.mjs'
+import { parseSearch, parseVideoInfo, searchUrl, videoInfoUrl, playerUrl, parseSubtitleList, parseTranscript } from './bilibiliApi.mjs'
+import { buildActionRequest, parseActionResponse } from './bilibiliActions.mjs'
+import { signWbiUrl } from './wbi.mjs'
+import { extractArticle } from './article.mjs'
 import { humanTime } from './human-time.mjs'
 import { importHistoryCandidates } from './history-import.mjs'
 import { burstDelay, splitReply } from './reply-split.mjs'
@@ -95,6 +102,8 @@ import { createOfflineReply, createRequestGate } from './request-guard.mjs'
 import { createMemoryGuard } from './memory-guard.mjs'
 import { createDailyPlanService } from './daily-plan.mjs'
 import { createPresenceService } from './presence.mjs'
+import { fetchWeather } from './presence.mjs'
+import { nextMoment, localDayKey, pickUpcomingDates, renderUpcomingLine } from './moment-clock.mjs'
 import { assessTiming, emptyRhythm, normalizeRhythm, recordActivity } from './timing.mjs'
 import { createSystemStats } from './system-stats.mjs'
 import { createAssetLibrary } from './assets.mjs'
@@ -132,6 +141,8 @@ import {
 import { isLoopbackEndpoint, planSpeak, probeTtsEndpoint, toTtsEndpoint } from './voice-service.mjs'
 import { createSettingsSync } from './sync.mjs'
 import { SYNC_SECRET_FIELD, SYNC_SECRET_SERVICE } from './syncCrypto.mjs'
+import { createDshSpeechWatcher } from './dsh-speech.mjs'
+import { toSpokenLine } from './dsh-speech-voice.mjs'
 import {
   mergeLayer,
   sanitizeSettingsPatch,
@@ -156,6 +167,8 @@ import { registerInsightChannels } from '../dist/main/ipc/insight.js'
 import { registerSyncChannels } from '../dist/main/ipc/sync.js'
 import { registerDiagnosticsChannels } from '../dist/main/ipc/diagnostics.js'
 import { registerWakeVoiceChannels } from '../dist/main/ipc/wake-voice.js'
+import { createAsrBackend } from './asr-backend.mjs'
+import { assessmentSchema, compareAssessments, scoreAssessment } from '../../../../../lib/companion/persona/persona-assessment.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -269,7 +282,7 @@ const builtinPacksRoot = devEnv('PET_BUILTIN_PACKS_ROOT') || path.join(assetsRoo
 const packStore = createPackStore({ root: packsRoot, builtinRoot: builtinPacksRoot, log })
 /** QQ 偷来的表情包先落这里，用户确认后才进素材包。 */
 const stickerInbox = createStickerInbox({ root: packsRoot, log })
-void stickerInbox.ensure()
+void stickerInbox.ensure().catch((error) => log('[boot] 表情收件箱初始化失败：', String(error?.message ?? error)))
 
 /**
  * 表情库：只用 Cyrene 自己的两套素材。
@@ -280,7 +293,7 @@ void stickerInbox.ensure()
 const stickerLibrary = createStickerLibrary({
   roots: [
     {
-      id: 'builtin',
+      id: 'builtin-cyrene-sticker',
       source: 'builtin',
       packId: 'cyrene-sticker',
       packName: 'Cyrene 小贴纸',
@@ -288,7 +301,7 @@ const stickerLibrary = createStickerLibrary({
       prefix: 'cyrene/sticker'
     },
     {
-      id: 'builtin',
+      id: 'builtin-cyrene-agent',
       source: 'builtin',
       packId: 'cyrene-agent',
       packName: 'Cyrene 表情包',
@@ -309,7 +322,7 @@ const stickerLibrary = createStickerLibrary({
     // 只在历史消息里还引用着旧 id 时兜底解析，
     // 不进预览、不参与挑图，避免老会话里的表情变成破图。
     {
-      id: 'builtin',
+      id: 'builtin-cyrene-stand',
       source: 'builtin',
       dir: path.join(assetsRoot, 'cyrene', 'stand'),
       prefix: 'cyrene/stand',
@@ -353,13 +366,13 @@ const agendaRuntime = createAgendaRuntime({
   file: path.join(userData, 'agenda-runtime.json'),
   log
 })
-void agendaRuntime.ready()
+void agendaRuntime.ready().catch((error) => log('[boot] 日程运行时初始化失败：', String(error?.message ?? error)))
 
 const handoffStore = createHandoffStore({
   file: path.join(userData, 'handoff.json'),
   log
 })
-void handoffStore.ready()
+void handoffStore.ready().catch((error) => log('[boot] 承接记录初始化失败：', String(error?.message ?? error)))
 /** 刚切过去、还没把承接说出口的那个窗口；只说一次，不反复提醒。 */
 let pendingHandoffScope = ''
 
@@ -383,13 +396,24 @@ const factStore = createFactStore({
 })
 
 /**
- * 说话习惯：只听旅人自己的句子，学一点语气和打字节奏。
- * 只落统计，不落原句；群聊不采样。
+ * 说话习惯：只听她自己的句子，学一点语气和打字节奏。
+ * 只落统计，不落原句；群聊按群维度累计。
  */
 const speechHabits = createSpeechHabitStore({
-  filePath: path.join(userData, 'speech-habits.json'),
+  filePath: path.join(userData, 'speech-habits.bin'),
+  // 旧的明文文件：读到就接过来，落盘换成密文后再删掉。
+  legacyPath: path.join(userData, 'speech-habits.json'),
   now: Date.now,
-  log
+  log,
+  // 和结构化记忆同一把信封：习惯画像也不留明文在磁盘上。
+  seal: async (value) => {
+    if (vaultClient === null) throw new Error('vault 未就绪，拒绝以明文写说话习惯')
+    return await vaultClient.seal(value, { kind: 'envelope' })
+  },
+  open: async (sealed) => {
+    if (vaultClient === null) throw new Error('vault 未就绪，拒绝读取说话习惯')
+    return await vaultClient.open(sealed)
+  }
 })
 
 /**
@@ -459,6 +483,11 @@ let qq = null
  * 只持有状态与下载器；麦克风权限看它的 isEnabled()，关掉即恢复默认拒绝。
  */
 let wakeVoice = null
+/** 语音输入后端；麦克风窗口只在开关打开时存在。 */
+let asr = null
+let micWin = null
+/** 权限检查是同步的，开关状态先落在这个变量里。 */
+let asrMicEnabled = false
 let webhookServer = null
 /**
  * QQ 运行状态：设置页只读，不参与决策。
@@ -502,12 +531,21 @@ let legacyKeyMigrationWarning = null
 let settingsWin = null
 /** 游戏页；单例。排班与记录从设置窗里独立出来，避免设置页无限变长。 */
 let gameWin = null
+/** 弹幕层：全屏透明、不吃鼠标，只负责把字横着放过去。 */
+let danmakuWin = null
+/** 陪看窗：一个普通浏览器窗，只允许停在 B 站域名里。 */
+let biliWin = null
 /** 能力中心；单例。 */
 let abilityWin = null
 /** 观察台；单例。 */
 let insightWin = null
+let memoryConsoleWin = null
 /** 表情包预览页；单例，和审核队列共用一份磁盘真相。 */
 let stickerWin = null
+/** 背景库独立页；单例，和 DSH 插件共用 userData/backgrounds 目录。 */
+let backgroundsWin = null
+/** 会话页；聊天历史与 QQ 会话合并在一页，单例。 */
+let sessionsWin = null
 /** 猜拳战绩只留内存：小游戏没有跨会话留存的价值，重启即清。 */
 /** 猜拳战绩：内存一份，落盘一份；非自洽数据整体忽略。 */
 const rpsGame = new RockPaperScissors()
@@ -595,8 +633,19 @@ const bodyService = createBodyService({
  * - 如果她本来在睡，这一句就是把她叫醒的那一下，记一笔，醒来时才知道自己没睡安稳。
  * 两件都是顺手做，失败不影响这一轮回复。
  */
+/*
+ * 身体层有两个开关：旧的身体分组（companion.body）和四条轴里的 body（companion.axes.body）。
+ * 任一关掉都算关，避免设置页两处各说各话。
+ */
+function bodyLayerOn() {
+  return (
+    settings?.companion?.body?.enabled !== false &&
+    settings?.companion?.axes?.body?.enabled !== false
+  )
+}
+
 async function readBodyNote(options = {}) {
-  if (settings?.companion?.body?.enabled === false) return ''
+  if (!bodyLayerOn()) return ''
   try {
     await bodyService.tick()
     const text = typeof options?.text === 'string' ? options.text.trim() : ''
@@ -887,6 +936,121 @@ try {
   log(`[intimacy] 读取失败：${error?.message ?? error}`)
 }
 
+// ---------- AI 工具执行器 ----------
+// 把 chat.mjs 里模型要调的工具名，映射到本进程真实能力。
+// 只读工具直接调 B 站函数；写操作走 biliWrite（策略 + 二次确认）；落库走 factStore。
+// 一律返回「结果对象」不抛网络错误——错误也作为结果回给模型，由它决定怎么回应。
+
+/** 落库工具：把模型提炼的知识 / 教训写进结构化记忆，默认 scope=shared 跨渠道共享。 */
+async function runAddFactsTool(args) {
+  const list = Array.isArray(args?.facts) ? args.facts : []
+  const incoming = list
+    .filter((item) => item !== null && typeof item === 'object')
+    .map((item) => ({
+      kind: typeof item.kind === 'string' && item.kind !== '' ? item.kind : 'knowledge',
+      text: String(item.text ?? '').trim(),
+      source: typeof item.source === 'string' ? item.source.slice(0, 80) : '',
+      confidence: item.confidence
+    }))
+    .filter((item) => item.text !== '')
+  if (incoming.length === 0) return { ok: false, message: '没有可写入的记忆' }
+  await factStore.load()
+  // upsert 可能因为去重、超限返回 ok:false：如实告诉模型，别让它以为已经记住。
+  const result = factStore.upsert(incoming, Date.now(), 'shared')
+  const added = Number(result?.added ?? 0)
+  const reinforced = Number(result?.reinforced ?? 0)
+  if (added + reinforced <= 0) {
+    return {
+      ok: false,
+      message: '没有写入新记忆：内容与已有记忆重复、被去重或超出上限',
+      result
+    }
+  }
+  return { ok: true, result }
+}
+
+/** 写操作工具：模型只给 bvid，这里先转成 aid 再交给 biliWrite。 */
+async function runBiliWriteTool(args, confirmed, source) {
+  const action = String(args?.action ?? '')
+  const bvid = String(args?.bvid ?? '')
+  // QQ 来源看不到桌面确认弹窗，写操作一律拒绝，避免挂死。
+  if (source?.channel === 'qq' && confirmed !== true) {
+    return { ok: false, error: 'QQ 来源暂不支持写操作，请在桌面上让我做' }
+  }
+  const info = await biliVideoInfo(bvid)
+  const aid = Number(info?.aid ?? 0)
+  if (!Number.isInteger(aid) || aid <= 0) {
+    return { ok: false, error: '拿不到视频 aid，写操作做不了' }
+  }
+  const params = {
+    video: { aid, bvid },
+    ...(typeof args?.message === 'string' && args.message !== '' ? { message: args.message } : {}),
+    ...(Number.isInteger(args?.coinCount) ? { coinCount: args.coinCount } : {})
+  }
+  return await biliWrite(action, params, confirmed)
+}
+
+/** 工具总闸：按名字分发。 */
+async function runPetTool(name, args, ctx = {}) {
+  const confirmed = ctx?.confirmed === true
+  const source = ctx?.source ?? null
+  try {
+    switch (name) {
+      case 'bili_search':
+        return await biliSearch(String(args?.keyword ?? ''))
+      case 'bili_video_info':
+        return await biliVideoInfo(String(args?.bvid ?? ''))
+      case 'bili_subtitle_list':
+        return await biliSubtitleList(String(args?.bvid ?? ''), String(args?.cid ?? ''))
+      case 'bili_transcript':
+        return await biliTranscript(String(args?.subtitleUrl ?? ''))
+      case 'bili_article':
+        return await biliArticle(String(args?.url ?? ''))
+      case 'bili_write':
+        return await runBiliWriteTool(args, confirmed, source)
+      case 'memory_add_facts':
+        return await runAddFactsTool(args)
+      default:
+        return { ok: false, error: `未知工具：${name}` }
+    }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+}
+
+/** 写操作二次确认：桌面弹系统对话框，等用户拍板。拒绝 / 弹窗失败都按不允许处理。 */
+async function requestPetConfirm(info) {
+  const name = info?.name ?? ''
+  const action = name === 'bili_write' ? String(info?.args?.action ?? '') : name
+  const bvid = String(info?.args?.bvid ?? '')
+  const actionLabel =
+    ({ like: '点赞', coin: '投币', favorite: '收藏', comment: '发评论', reply: '回复' })[action] ?? action
+  const detail =
+    bvid !== ''
+      ? `视频 ${bvid}${typeof info?.message === 'string' && info.message !== '' ? `\n${info.message}` : ''}`
+      : String(info?.message ?? '')
+  try {
+    const options = {
+      type: 'warning',
+      buttons: ['允许', '拒绝'],
+      defaultId: 1,
+      cancelId: 1,
+      title: '需要你确认',
+      message: `她想要执行「${actionLabel}」`,
+      detail: detail.trim() === '' ? undefined : detail.trim(),
+      noLink: true
+    }
+    const result =
+      win === null || win.isDestroyed()
+        ? await dialog.showMessageBox(options)
+        : await dialog.showMessageBox(win, options)
+    return { allowed: result?.response === 0 }
+  } catch (error) {
+    log('写操作确认弹窗失败，按拒绝处理', error)
+    return { allowed: false }
+  }
+}
+
 /** 聊天服务：密钥现取现用，短期历史在内存，长期记忆加密落盘。 */
 const chatService = createChatService({
   getSettings: () => settings,
@@ -948,10 +1112,12 @@ const chatService = createChatService({
   // 贴近时刻：默认关。开关打开、桌面本机、次数与冷却都允许、且这一轮有由头时，
   // 才给一段分寸；其余时候回空串，模型不会知道有这回事。
   getIntimacyNote: async ({ text, scope }) => {
-    if (scope !== 'desktop') return ''
+    const zone = typeof scope === 'string' && scope !== '' ? scope : 'desktop'
+    // 桌面本来就在一起；QQ 私聊要主人逐个打开，群聊不在其列。
+    if (zone !== 'desktop' && settings?.companion?.intimacy?.peers?.[zone] !== true) return ''
     // 精力见底就不靠近；身体层关着或读不到时按「拿不到精力」处理，不拦。
     let energy
-    if (settings?.companion?.body?.enabled !== false) {
+    if (bodyLayerOn()) {
       try {
         await bodyService.tick()
         const snapshot = bodyService.snapshot()
@@ -966,7 +1132,7 @@ const chatService = createChatService({
     let relationFavor = null
     try {
       await affinity.ready()
-      const bond = affinity.snapshot('desktop')
+      const bond = affinity.snapshot(zone)
       relationTier = bond?.levelId ?? ''
       relationFavor = Number.isFinite(bond?.favor) ? bond.favor : null
     } catch (error) {
@@ -974,7 +1140,7 @@ const chatService = createChatService({
     }
     const verdict = intimacyGate.check({
       settings,
-      scope: 'desktop',
+      scope: zone,
       userText: typeof text === 'string' ? text : '',
       personaText: buildPersonaPrompt(settings).text,
       relationTier,
@@ -988,9 +1154,9 @@ const chatService = createChatService({
   filterIntimacy: (text) => intimacyGate.filterReply(text, Date.now()),
   // 真说出口才推进一格：第一次计一次数，到顶自动收场并留余韵。
   // 收场会回报 ended，顺手记一笔额外的社交消耗——这一场比平时更累。
-  onIntimacySpoken: () => {
-    const next = intimacyGate.noteTurn()
-    if (next?.ended === true && settings?.companion?.body?.enabled !== false) {
+  onIntimacySpoken: (scope = 'desktop') => {
+    const next = intimacyGate.noteTurn(undefined, scope)
+    if (next?.ended === true && bodyLayerOn()) {
       void bodyService.noteChat(4).catch((error) => log('贴近收场消耗记账失败', error))
     }
     return next
@@ -1010,7 +1176,7 @@ const chatService = createChatService({
   },
   // 结构化记忆：按当前这句话召回，不把整本记忆塞进提示词。
   // 纠错时多取几条证据，问当下时少取几条，避免答非所问。
-  getFactNote: async (text, scope) => {
+  getFactNote: async (text, scope, source = null) => {
     await factStore.load()
     const said = typeof text === 'string' ? text : ''
     // 「你记错了」这类话，先落到上一轮真正端出去的那条记忆上，再重新召回。
@@ -1029,12 +1195,19 @@ const chatService = createChatService({
       // 群聊只带「随时可提」的记忆；私聊才给「被问到再说」的条目。
       context: typeof scope === 'string' && scope.startsWith('qq:group') ? 'group' : 'private'
     })
-    // 顺手听一句她怎么说话：只统计形状，不存原句；群聊在 store 里直接跳过。
+    // 顺手听一句她怎么说话：只统计形状，不存原句。
+    // 群聊按群维度累计：一个群的说话方式比单独某个人更值得参考。
     let habit = ''
     try {
       await speechHabits.load()
-      speechHabits.observe(scope, said)
-      habit = speechHabits.note(scope)
+      const habitKey =
+        typeof scope === 'string' && scope.startsWith('qq:group')
+          ? scope.split('#')[0]
+          : scope
+      const sender =
+        source?.senderId ?? source?.userId ?? source?.openId ?? source?.sender ?? ''
+      speechHabits.observe(habitKey, said, sender)
+      habit = speechHabits.note(habitKey)
     } catch (error) {
       log(`[habits] 这一轮跳过：${error?.message ?? error}`)
     }
@@ -1095,13 +1268,18 @@ const chatService = createChatService({
     if (!memoryEnabled()) return
     // 原文摘要仍共用一份，但给外部渠道的话留来源与说话人，
     // 免得摘要时把群里 A 的话算到 B 头上。
-    const tag =
-      source?.channel === 'qq'
-        ? source.chatType === 'group'
-          ? `［QQ 群聊｜${describeSpeaker(source) || '群友'}］`
-          : '［QQ 私聊］'
-        : ''
-    memoryStore.appendTurn('user', `${tag}${user}`, at, source, scope)
+    // 群友的群消息在入站时已经写过：这里不重复写，避免同一条记两遍。
+    if (source?.channel === 'qq' && source.chatType === 'group' && source.isOwner !== true) {
+      // 入站已写，跳过用户那半；她的回复仍要记。
+    } else {
+      const tag =
+        source?.channel === 'qq'
+          ? source.chatType === 'group'
+            ? `［QQ 群聊｜${describeSpeaker(source) || '群友'}］`
+            : '［QQ 私聊］'
+          : ''
+      memoryStore.appendTurn('user', `${tag}${user}`, at, source, scope)
+    }
     memoryStore.appendTurn('assistant', assistant, at, null, scope)
   },
   // 聊天历史独立落盘；加密仓库不可用时 appendTurn 返回 false，自动退回内存。
@@ -1111,6 +1289,9 @@ const chatService = createChatService({
   },
   persistClear: () => chatHistoryStore.clear(),
   fetchImpl: (url, init) => net.fetch(url, init),
+  // 工具执行：模型 tool_calls 时由 chat.mjs 回调到这里；写操作走二次确认。
+  runTool: runPetTool,
+  requestConfirm: requestPetConfirm,
   log
 })
 
@@ -1148,6 +1329,13 @@ function takeStickerStealBudget(info) {
   return true
 }
 
+/** 下载失败时退回刚扣掉的那张额度：失败不该烧掉一天的收图机会。 */
+function refundStickerStealBudget(info) {
+  const key = stickerStealBudgetKey(info)
+  const used = stickerStealBudget.get(key) ?? 0
+  stickerStealBudget.set(key, Math.max(0, used - 1))
+}
+
 /**
  * 把 QQ 消息里的图片下载到待审核目录。
  * 内容重复的会在 inbox 里被指纹挡掉，这里只负责下载和计数。
@@ -1169,11 +1357,13 @@ async function saveQqImages(info, images) {
       const response = await net.fetch(image.url)
       if (!response.ok) {
         log(`[sticker] 下载失败 HTTP ${response.status}`)
+        refundStickerStealBudget(info)
         continue
       }
       const buffer = Buffer.from(await response.arrayBuffer())
       if (buffer.byteLength > QQ_STICKER_MAX_BYTES) {
         log(`[sticker] 下载后超过上限，丢弃：${buffer.byteLength} bytes`)
+        refundStickerStealBudget(info)
         continue
       }
       const item = await stickerInbox.add({
@@ -1190,6 +1380,8 @@ async function saveQqImages(info, images) {
       })
       saved.push(item)
     } catch (error) {
+      // 网络挂了、inbox 写失败：额度退回去，下一张还能试。
+      refundStickerStealBudget(info)
       log(`[sticker] 保存失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
@@ -1396,7 +1588,9 @@ async function handleQqChat(info) {
     const proactiveScope =
       info.chatType === 'group' ? `qq:group:${info.openId}` : `qq:private:${info.openId}`
     // 对方开口了：先清掉「发出去没人接」的账，止损立刻解除。
-    // 顺序要在调模型之前，这一轮不该因为旧账被拦。
+    // 顺序要在调模型之前，这一轮不该因为旧账被拦；但清账前留一份快照，
+    // 模型没回成时原样还回去，下一轮主动开口仍会被收敛。
+    const silenceBefore = proactiveGate.peekSilence(proactiveScope)
     proactiveGate.noteUserSpoke(proactiveScope)
     // 之前问过、还没结论的话头，交给这一轮一起判断要不要接。
     const reviews = proactiveGate.pendingReviews(proactiveScope)
@@ -1426,6 +1620,8 @@ async function handleQqChat(info) {
       }
     })
     if (result?.ok !== true) {
+      // 这一轮没回成：止损账还回去，别让「对方其实没等到回应」被当成已解除。
+      proactiveGate.restoreSilence(proactiveScope, silenceBefore)
       log(`[qq] 聊天未回复：${result?.reason ?? 'unknown'}`)
       return
     }
@@ -1554,11 +1750,13 @@ async function maybeSpeakInGroup(info) {
   // 先看这条消息和她是什么关系：在叫她、在接她的话、聊到她在意的事，还是别人之间的闲聊。
   // 这一层不决定回不回，只决定「值不值得交给后面的分寸判断」。
   await factStore.load()
-  const topics = factStore
-    .snapshot(scope)
-    .facts.filter((fact) => fact.archived !== true)
+  // 快照可能为 null（读失败）：topic 取空数组，不抛 TypeError，别让整条群插话中断。
+  const groupSnapshot = factStore.snapshot(scope)
+  const topics = (Array.isArray(groupSnapshot?.facts) ? groupSnapshot.facts : [])
+    .filter((fact) => fact !== null && typeof fact === 'object' && fact.archived !== true)
     .slice(-12)
-    .map((fact) => fact.text)
+    .map((fact) => (typeof fact.text === 'string' ? fact.text : ''))
+    .filter((item) => item !== '')
   const address = classifyGroupAddress({
     text,
     mentioned: info.mentioned === true,
@@ -1586,7 +1784,7 @@ async function maybeSpeakInGroup(info) {
   // 精力也参与群里的分寸：困到不行时只应被叫到的，不接别人的话头；
   // 只是累了就不自己找话题，刚聊完的那条线仍可以接。
   let groupBody = null
-  if (settings?.companion?.body?.enabled !== false) {
+  if (bodyLayerOn()) {
     await bodyService.tick()
     groupBody = bodyService.snapshot()
   }
@@ -1753,10 +1951,80 @@ function log(...args) {
   appendLogFile(`${new Date().toISOString()} [desktop] ${args.map(formatLogArg).join(' ')}\n`)
 }
 
+const BUILTIN_WAKE_WORDS = ['昔涟', '迷迷', '德谬歌', '小涟']
+
+/**
+ * 语音唤醒词和文字唤醒是两份名单。
+ * 文字唤醒决定「要不要接话」，语音唤醒决定「这一轮要不要出声」；
+ * 前者在群聊里要宽一点，后者在家里只留最顺口的那个称呼就好。
+ */
+const BUILTIN_VOICE_WAKE_WORDS = ['发句语音']
+
+/**
+ * 时刻表记账：同一天同一类时刻只说一次。
+ * key 自带日期，跨天自然失效；换日时顺手清掉旧 key，Set 不会越攒越长。
+ */
+const spokenMoments = new Set()
+
+/**
+ * 从记忆里找最近几天的考试、面试这类约定。
+ * 记忆没开、接口变了、一条都没命中，都只返回空数组——
+ * 时刻表少说一句没关系，不能因此把主动开口整条路弄断。
+ */
+function upcomingFromMemory(now) {
+  try {
+    const found = memoryStore.search('考试 面试 答辩 日期', { scope: 'desktop', limit: 20 })
+    const rows = Array.isArray(found) ? found : Array.isArray(found?.items) ? found.items : []
+    const texts = rows
+      .map((row) => String(row?.text ?? row?.content ?? ''))
+      .filter((text) => text !== '')
+    return pickUpcomingDates({ memories: texts, now, horizonDays: 3 })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 「DSH 语音」四个场景，各管一段路：
+ * reply 每条回复都念、wakeWord 只在叫名字那轮、
+ * autonomous 她主动开口时、moments 早晚和每日回顾。
+ *
+ * 没写过 dshScenes 的老配置退回 readDsh 一个开关，等价于 reply。
+ */
+function dshSceneEnabled(scene) {
+  const voice = settings?.voice
+  // 老配置只有 readDsh 一个开关：它亮着就等价于「收到回复就念」。
+  // 设置页第一次动这四个场景时会顺手把旧字段清掉，之后不再回弹。
+  if (voice?.readDsh === true && scene === 'reply') return true
+  return voice?.dshScenes?.[scene] === true
+}
+
+/** 这一句里有没有叫到「语音唤醒词」。和文字唤醒分开读，互不借用。 */
+function hasVoiceWakeWord(text) {
+  if (typeof text !== 'string' || text === '') return false
+  // 配置里可能混进空格或空项：先收干净，再逐条比。
+  const configured = Array.isArray(settings?.voice?.voiceWakeWords)
+    ? settings.voice.voiceWakeWords
+        .map((word) => (typeof word === 'string' ? word.trim() : ''))
+        .filter((word) => word !== '')
+    : []
+  const words = configured.length > 0 ? configured : BUILTIN_VOICE_WAKE_WORDS
+  return words.some((word) => text.includes(word))
+}
+
+/** 场景那盏灯亮着就顺手挂一句提炼稿；没给场景就只出字。 */
+function speechFor(text, scene) {
+  if (scene === null || scene === undefined) return null
+  if (!dshSceneEnabled(scene)) return null
+  return toSpokenLine(text, { maxChars: settings?.voice?.maxChars })
+}
+
 /** 主进程主动说一句。窗口不在或已销毁就安静跳过，不排队补发。 */
 function sendBubble(text, motion = null, meta = null) {
   if (typeof text !== 'string' || text.trim() === '') return false
   if (win === null || win.isDestroyed()) return false
+  const explicit = typeof meta?.speakText === 'string' && meta.speakText !== '' ? meta.speakText : null
+  const speakText = explicit ?? speechFor(text, meta?.scene)
   win.webContents.send('pet:bubble', {
     text,
     // AI 挑的动作名；渲染层按素材真实能力决定播不播，null 表示这句不带动作。
@@ -1765,9 +2033,120 @@ function sendBubble(text, motion = null, meta = null) {
     emojiId: typeof meta?.emojiId === 'string' && meta.emojiId !== '' ? meta.emojiId : null,
     // 可选 ack 键：只有带它的气泡才显示「知道了」，点击后升 confirmed。
     ackSegment:
-      typeof meta?.ackSegment === 'string' && meta.ackSegment !== '' ? meta.ackSegment : null
+      typeof meta?.ackSegment === 'string' && meta.ackSegment !== '' ? meta.ackSegment : null,
+    // 气泡显示原文，念出来的是另一句提炼过的；null 表示这一句不出声。
+    speakText: typeof speakText === 'string' && speakText !== '' ? speakText : null
   })
   return true
+}
+
+/**
+ * 桌宠开口的唯一出口。
+ *
+ * 从前十来处各调各的 sendBubble，「这句话该不该记账」散在各处，漏掉一处就是
+ * 一条看不见的裂缝 —— 用户点击那条路就漏过：自主 tick 不知道刚刚才说过话，
+ * 十几秒后又冒一句，两个气泡顶在一起互相打断。
+ * 收拢之后记账策略跟着 origin 走，新场景只要选对 origin 就不会再漏。
+ *
+ * origin:
+ *   proactive  她自己想到一件事要说：占每日额度、进未回应队列、写记忆
+ *   closer     收场善后：走 markClosed，占额度，不写记忆（善后不算新话头）
+ *   onDemand   用户戳她（单击）：只记冷却与去重池，不占额度、不进未回应队列，写记忆
+ *   reply      在回应用户（DSH 回复念出、唤醒词应答）：不记账，本来就是被叫到的
+ *   notice     系统播报（时刻、日程、每日回顾、余额告警）：不记账，不占她的开口额度
+ *
+ * 场景特有的副作用（log、lastSpokenAt、认领日程段落、收起念头）留在调用点，
+ * 这里只管「发出去」和「记什么账」。
+ */
+/* 同句去重：自主循环等不到回应时会一拍一拍重复同一句，「连弹三个相同提问」就是这么来的。
+   主动 / 播报类台词在冷却期内重复就直接吞掉；用户主动触发（onDemand / reply）不受限，
+   点击反馈必须每次都有响应。渲染层 onBubble 还有一层同样口径的兜底。 */
+const SPEAK_REPEAT_COOLDOWN_MS = 10 * 60 * 1000
+let lastSpeakOutText = null
+let lastSpeakOutAt = 0
+
+function speakOut({
+  text,
+  motion = null,
+  emojiId = null,
+  ackSegment = null,
+  speakText = null,
+  scene = null,
+  origin = 'notice',
+  scope = 'desktop',
+  reason = ''
+}) {
+  if (
+    origin !== 'onDemand' &&
+    origin !== 'reply' &&
+    typeof text === 'string' &&
+    text === lastSpeakOutText &&
+    Date.now() - lastSpeakOutAt < SPEAK_REPEAT_COOLDOWN_MS
+  ) {
+    log('[speak] 冷却期内重复台词，不再推送：', text.slice(0, 24))
+    return false
+  }
+
+  const meta = {}
+  if (typeof emojiId === 'string' && emojiId !== '') meta.emojiId = emojiId
+  if (typeof ackSegment === 'string' && ackSegment !== '') meta.ackSegment = ackSegment
+  if (typeof speakText === 'string' && speakText !== '') meta.speakText = speakText
+  if (typeof scene === 'string' && scene !== '') meta.scene = scene
+
+  const sent = sendBubble(text, motion, meta)
+  // 窗口不在或已销毁就没真说出去，这种时候不记账，下一拍还有机会。
+  if (!sent) return false
+
+  lastSpeakOutText = text
+  lastSpeakOutAt = Date.now()
+
+  if (origin === 'proactive') proactiveGate.markSpoke(scope, text)
+  else if (origin === 'closer') proactiveGate.markClosed(scope)
+  else if (origin === 'onDemand') proactiveGate.markSpokeOnDemand(scope, text)
+
+  // 说过的话要留在记忆里。不写回去，她下次不知道自己刚才说过什么，
+  // 会像没发生过一样重新开场。只记自己这一句，不替对方编回应。
+  if ((origin === 'proactive' || origin === 'onDemand') && memoryEnabled()) {
+    memoryStore.appendTurn(
+      'assistant',
+      text,
+      new Date().toISOString(),
+      { channel: scope, proactive: origin === 'proactive', reason },
+      scope
+    )
+  }
+  return true
+}
+
+/**
+ * DSH 回复念出：只读会话文件，有新回复就交给 sendBubble。
+ *
+ * 气泡留原文；要出声时另送一句提炼过的，代码、路径、分点都先剥掉。
+ * 监听只看 reply / wakeWord 这两盏灯，其余场景不依赖会话文件。
+ */
+const dshSpeech = createDshSpeechWatcher({
+  onReply: (text, info) => {
+    const shouldSpeak =
+      dshSceneEnabled('reply') || (dshSceneEnabled('wakeWord') && hasVoiceWakeWord(info?.userText))
+    const spoken = shouldSpeak ? toSpokenLine(text, { maxChars: settings?.voice?.maxChars }) : null
+    speakOut({ text, speakText: spoken, origin: 'reply' })
+  },
+  log
+})
+
+function syncDshSpeech(voice = settings?.voice) {
+  const scenes = voice?.dshScenes ?? {}
+  // 四盏灯任意一盏亮着，语音服务都得在。
+  // 只开「自主开口」或「特定时刻」时，回复监听用不上，
+  // 但那两盏灯的句子照样要念，扬声器不能因为监听没开就不启动。
+  const anyDsh =
+    voice?.readDsh === true ||
+    scenes.reply === true ||
+    scenes.wakeWord === true ||
+    scenes.autonomous === true ||
+    scenes.moments === true
+  if (anyDsh && !dshSpeech.isRunning()) dshSpeech.start()
+  else if (!anyDsh && dshSpeech.isRunning()) dshSpeech.stop()
 }
 
 /**
@@ -1819,6 +2198,9 @@ const presenceService = createPresenceService({
   getPersonaText: (current) => buildPersonaPrompt(current).text,
   // 真实心情、未完话头、主动说话的表情候选都从陪伴层取，不再由时间硬推。
   getCompanion: () => companionService,
+  // 表情情绪：余波还没散完时先维持上一张脸，实验组再决定要不要换。
+  // 默认关着时 decideExpression 原样返回，和旧行为一致。
+  decideEmotion: (emotion) => emotionRuntime.decideExpression(emotion),
   // 动作清单来自渲染层每 2 秒的上报；还没上报过就是 null，提示词里不会凭空出现动作。
   getMotionCatalog: () => lastRenderInfo?.motion ?? null,
   // 身体感觉：开口前先推进到现在；累就是累，不假装精神。
@@ -1829,6 +2211,8 @@ const presenceService = createPresenceService({
   getAnniversaryNote: readAnniversaryNote,
   // 识屏：默认关；打开后十分钟最多读一次，读到多少算多少。
   getScreenNote: readScreenNote,
+  // 余额是否真的低于阈值：只看最近一次真实抓取，不把「设过阈值」当低。
+  getBalanceLow: balanceLowNow,
   fetchImpl: (url, init) => net.fetch(url, init),
   // 上次说话与今天开过几次要跨重启；文件和读写都留在主进程。
   loadState: () => presenceState,
@@ -1853,6 +2237,8 @@ const insight = createInsightService({
   affinity,
   proactiveGate,
   handoffStore,
+  // 观察台读的是同一份设置，开关状态与运行时完全一致。
+  getIntimacyPeers: () => settings?.companion?.intimacy?.peers ?? {},
   log
 })
 
@@ -1911,7 +2297,9 @@ async function readEnvironmentNote() {
 /** 识屏：十分钟最多读一次；同一块屏幕没必要反复认，也省点电。 */
 const SCREEN_NOTE_TTL_MS = 10 * 60_000
 const SCREEN_OCR_TIMEOUT_MS = 12_000
-let screenNoteCache = { at: 0, text: '' }
+let screenNoteCache = { at: 0, text: '', failed: false }
+/** 识屏失败只压 2 分钟：OCR 脚本被删、PowerShell 被策略拦住这类可恢复错误不该等满 10 分钟。 */
+const SCREEN_NOTE_FAIL_TTL_MS = 2 * 60_000
 let screenNoteInFlight = null
 let ocrScriptPath = null
 
@@ -1959,7 +2347,9 @@ function runScreenOcr(script, imagePath, outPath) {
  */
 async function readScreenNote() {
   if (settings?.presence?.screen?.enabled !== true) return ''
-  if (Date.now() - screenNoteCache.at < SCREEN_NOTE_TTL_MS) return screenNoteCache.text
+  // 成功结果按 10 分钟缓存；失败结果只压 2 分钟就允许重试。
+  const ttl = screenNoteCache.failed === true ? SCREEN_NOTE_FAIL_TTL_MS : SCREEN_NOTE_TTL_MS
+  if (Date.now() - screenNoteCache.at < ttl) return screenNoteCache.text
   if (screenNoteInFlight !== null) return screenNoteInFlight
 
   screenNoteInFlight = (async () => {
@@ -1984,12 +2374,12 @@ async function readScreenNote() {
       const raw = await fs.readFile(outPath, 'utf8')
       const parsed = JSON.parse(raw.replace(/^\uFEFF/, ''))
       const text = summarizeScreenText(parsed?.lines)
-      screenNoteCache = { at: Date.now(), text }
+      screenNoteCache = { at: Date.now(), text, failed: false }
       return text
     } catch (error) {
       log('识屏读取失败：', error?.message ?? error)
-      // 失败也记一次时间，免得每轮都重试一遍。
-      screenNoteCache = { at: Date.now(), text: '' }
+      // 失败短缓存：2 分钟后重试，不每轮都打 PowerShell，也不堵满整个 TTL。
+      screenNoteCache = { at: Date.now(), text: '', failed: true }
       return ''
     } finally {
       screenNoteInFlight = null
@@ -2040,10 +2430,29 @@ function saveRhythmSoon() {
   rhythmSaveTimer.unref?.()
 }
 
+/** 退出前把防抖窗口里的最后一笔作息同步写掉，不让 5 秒防抖吞掉它。 */
+function flushRhythmNow() {
+  if (rhythmSaveTimer !== null) {
+    clearTimeout(rhythmSaveTimer)
+    rhythmSaveTimer = null
+  }
+  try {
+    fsSync.writeFileSync(rhythmFile, JSON.stringify(rhythmState))
+  } catch (error) {
+    log('作息退出落盘失败：', error?.message ?? error)
+  }
+}
+
 /** 桌面上有人说话：记一笔作息，顺便把「刚聊完」的计时起点推到现在。 */
 function noteDesktopActivity(scope, at) {
   if (scope !== 'desktop') return
-  const stamp = Number.isFinite(Number(at)) ? Number(at) : Date.now()
+  // at 可能是 ISO 字符串（onExchange 传来）：Date.parse 兜一层，别把整条作息压成「此刻」。
+  const stamp =
+    Number.isFinite(Number(at)) && Number(at) > 0
+      ? Number(at)
+      : typeof at === 'string' && at !== '' && Number.isFinite(Date.parse(at))
+        ? Date.parse(at)
+        : Date.now()
   lastDesktopUserSpokeAt = stamp
   rhythmState = recordActivity(rhythmState, stamp)
   saveRhythmSoon()
@@ -2070,6 +2479,8 @@ let presenceTimer = null
  * 不把间隔直接写进 setInterval —— 设置改完要立刻生效，不用等这一轮走完。
  */
 let lastSpokenAt = 0
+/** 节目单 ensure 的 in-flight 去重：30 秒一拍的 presenceTick 不叠加生成请求。 */
+let dailyPlanEnsureInFlight = null
 /** 锁屏或休眠期间不搭话；唤醒后把计时起点推到现在，不补发。 */
 let systemAsleep = false
 
@@ -2102,8 +2513,12 @@ async function closingTick() {
       if (scope === 'desktop') {
         const desktopDecision = proactiveGate.decideCloser(scope)
         if (desktopDecision.speak !== true) continue
-        sendBubble(pickCloserLine(desktopDecision.index), null, null)
-        proactiveGate.markClosed(scope)
+        const delivered = speakOut({ text: pickCloserLine(desktopDecision.index), scene: 'autonomous', origin: 'closer', scope })
+        // 窗口已销毁时 speakOut 返回 false：没真说出去，日志不能写成「已收场」。
+        if (delivered !== true) {
+          log('[desktop] 收场没送出去（窗口不可用），留到下一拍')
+          continue
+        }
         log(`[desktop] 收场（第 ${desktopDecision.index} 次）`)
         continue
       }
@@ -2196,7 +2611,17 @@ async function presenceTick() {
 
   // 主动说话前顺手确保今天的节目单在；不等它，先按现有安排说话。
   // 生成成功要几秒，下一拍才会用上；失败就继续沿用昨天的结构。
-  void dailyPlanService.ensure()
+  // in-flight 去重：30 秒一拍，生成要几秒到几十秒，慢请求不能叠加成并发写同一份。
+  if (dailyPlanEnsureInFlight === null) {
+    dailyPlanEnsureInFlight = Promise.resolve()
+      .then(() => dailyPlanService.ensure())
+      .catch((error) => {
+        log('[desktop] 节目单生成失败', error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => {
+        dailyPlanEnsureInFlight = null
+      })
+  }
 
   // 有放置够久、还没回访过的话头时，允许提前一次。
   const loop =
@@ -2225,13 +2650,63 @@ async function presenceTick() {
   )
   if (Date.now() - lastSpoken < interval) return
 
+  // 特定时刻排在念头池前面：早安、晚安、天气转坏都有明确的时间窗，错过就没了。
+  // 这些句子由时刻表自己写，不经过模型——一句话的问候没必要等一次推理。
+  const momentNow = new Date()
+  const momentDay = localDayKey(momentNow)
+  for (const key of spokenMoments) {
+    if (!key.startsWith(momentDay)) spokenMoments.delete(key)
+  }
+  const momentWeather =
+    settings?.presence?.useWeather === false
+      ? null
+      : await fetchWeather({ city: settings?.presence?.city })
+  const moment = nextMoment({
+    now: momentNow,
+    spokenKeys: spokenMoments,
+    weatherAlert: typeof momentWeather?.alertNote === 'string' ? momentWeather.alertNote : '',
+    name: typeof settings?.nickname === 'string' ? settings.nickname : ''
+  })
+  if (moment !== null) {
+    spokenMoments.add(moment.key)
+    lastSpokenAt = Date.now()
+    log(`[desktop] 时刻开口：${moment.kind}`)
+    speakOut({ text: moment.line, scene: 'moments', origin: 'notice' })
+    return
+  }
+
+  // 重要日子：考试、面试这类，从记忆里自己找，提前三天开始提。
+  // 同一件事只说一次，key 用日期收尾，换个日子才算新的一件。
+  const upcoming = upcomingFromMemory(momentNow)
+  if (upcoming.length > 0) {
+    const item = upcoming[0]
+    const upcomingKey = `${momentDay}:upcoming:${item.date.toISOString().slice(0, 10)}`
+    if (!spokenMoments.has(upcomingKey)) {
+      spokenMoments.add(upcomingKey)
+      lastSpokenAt = Date.now()
+      log(`[desktop] 时刻开口：upcoming ${item.label}`)
+      speakOut({
+        text: renderUpcomingLine(item, typeof settings?.nickname === 'string' ? settings.nickname : ''),
+        scene: 'moments',
+        origin: 'notice'
+      })
+      return
+    }
+  }
+
   // 陪伴层先回答「这一拍为什么开口」：日程段落、未完话头、很久没联系。
   // 先有由头，再过闸门；没有由头就不硬找话题，这一拍安静地过去。
   // 身体状态也参与判断：睡着了、精力见底就安静过去，只是累了先不挑日常话题。
   let body = null
-  if (settings?.companion?.body?.enabled !== false) {
+  if (bodyLayerOn()) {
     await bodyService.tick()
     body = bodyService.snapshot()
+    // 睡着或深夜安静＝真的在休息：休息需求被满足一点。
+    // 没有这个出口，rest 只会自然回升、6 小时后把主动开口永久压停。
+    const flags = body?.flags ?? {}
+    if (flags.exhausted === true || flags.asleep === true || quietMode === 'reduce') {
+      emotionRuntime.noteRest()
+    }
   }
   // 念头池排在最前：先挑一条攒了二十分钟以上、还没说过的。
   const thought = nextSpeakableThought()
@@ -2260,26 +2735,20 @@ async function presenceTick() {
     }
     return
   }
-  // 只有真的通过闸门才占用间隔，否则「没有由头」会被每 12 分钟重置一次。
-  lastSpokenAt = Date.now()
-
+  // 间隔只在真的说出话之后占用：模型超时、返回空都不该烧掉一整拍。
   const result = await presenceService.nextLine(loop !== null ? 'loop' : 'auto', focusText)
   if (typeof result.line === 'string' && result.line !== '') {
-    sendBubble(result.line, result.motion, { emojiId: result.emojiId })
-    // 桌面气泡也算一次「主动说过」：很久没人接时，收场会往回收一句。
-    // 只记在 desktop 这一本账上，不影响 QQ 的开口额度。
-    proactiveGate.markSpoke('desktop', result.line)
-    // 说过的话要留在记忆里。不写回去，她下次就不知道自己昨晚随口提过什么，
-    // 会像没发生过一样重新开场。只记自己这一句，不替对方编回应。
-    if (memoryEnabled()) {
-      memoryStore.appendTurn(
-        'assistant',
-        result.line,
-        new Date().toISOString(),
-        { channel: 'desktop', proactive: true, reason: cueDecision.reason },
-        'desktop'
-      )
-    }
+    lastSpokenAt = Date.now()
+    // 记账与写记忆都交给 speakOut 按 origin='proactive' 处理：占 desktop 这一本账的
+    // 每日额度，不影响 QQ；很久没人接时，收场会往回收一句。
+    speakOut({
+      text: result.line,
+      motion: result.motion,
+      emojiId: result.emojiId,
+      scene: 'autonomous',
+      origin: 'proactive',
+      reason: cueDecision.reason
+    })
     // 日程段落说完就认领，同一段今天不再重复提。
     if (opening !== null && opening.segmentId !== null) await companionService.claimAgenda()
     // 真正说出口之后才记为回访过；没说出话就留到下一拍再试。
@@ -2356,9 +2825,17 @@ function startDailyReviewTimer() {
     if (quietModeAt(now, settings?.presence?.quiet) === 'silent') return
 
     lastDailyReviewDate = today
-    void dailyReviewRunner().then((result) => {
-      if (result.ok) sendBubble(result.summary)
-    })
+    // 失败要兜住：runner reject 时不能变成 unhandled rejection，
+    // 当天日期已在上面记过、不再重试，所以更要留一条可查的日志。
+    void dailyReviewRunner()
+      .then((result) => {
+        if (result?.ok === true && typeof result.summary === 'string' && result.summary !== '') {
+          speakOut({ text: result.summary, scene: 'moments', origin: 'notice' })
+        }
+      })
+      .catch((error) => {
+        log('[daily] 每日巡视执行失败：', error instanceof Error ? error.message : String(error))
+      })
   }, 30_000)
   dailyReviewTimer.unref?.()
 }
@@ -2419,6 +2896,47 @@ async function readSettings() {
   return {}
 }
 
+/*
+ * 插件侧与设置窗是两个进程，都会整份重写 settings.json。
+ * 两边必须用同一个锁文件，否则「读-改-写」会互相覆盖。
+ */
+const SETTINGS_LOCK_PATH = `${settingsPath}.lock`
+
+async function withSettingsLock(run) {
+  const deadline = Date.now() + 2000
+  for (;;) {
+    let handle = null
+    try {
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+      handle = await fs.open(SETTINGS_LOCK_PATH, 'wx')
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+      // 进程崩溃/强杀会留下锁文件：超过 30 秒没人续的锁按残留处理，清掉重试，
+      // 否则一次崩溃之后每次写设置都永久失败。
+      try {
+        const stat = await fs.stat(SETTINGS_LOCK_PATH)
+        if (Date.now() - stat.mtimeMs > 30_000) {
+          await fs.rm(SETTINGS_LOCK_PATH, { force: true })
+          log('[settings] 清理崩溃残留的设置锁')
+          continue
+        }
+      } catch {
+        // 锁刚好被别人释放：回到循环顶部再抢一次。
+        continue
+      }
+      if (Date.now() >= deadline) throw new Error('等待 settings.lock 超时')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      continue
+    }
+    try {
+      return await run()
+    } finally {
+      await handle.close().catch(() => {})
+      await fs.rm(SETTINGS_LOCK_PATH, { force: true }).catch(() => {})
+    }
+  }
+}
+
 /** 每次写设置前备份上一份可解析的内容；坏文件不配覆盖好备份。 */
 async function writeSettings(value) {
   // 再兜一道：调用方把路径、字符串或数组递进来时当场拒绝。
@@ -2426,15 +2944,222 @@ async function writeSettings(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`settings 必须是对象，已拒绝写入 ${typeof value}`)
   }
-  try {
-    const previous = await readJsonFile(settingsPath)
-    await writeJsonAtomic(`${settingsPath}.bak`, previous)
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      log('[settings] 旧设置无法解析，保留现有备份：', error?.message ?? error)
+  return withSettingsLock(async () => {
+    try {
+      const previous = await readJsonFile(settingsPath)
+      await writeJsonAtomic(`${settingsPath}.bak`, previous)
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        log('[settings] 旧设置无法解析，保留现有备份：', error?.message ?? error)
+      }
     }
+    await writeJsonAtomic(settingsPath, value)
+    /* 本地改动稍后推回 DSH；DSH 没装时这一步静默跳过 */
+    scheduleSettingsPush()
+  })
+}
+
+/* ---------------- 双端设置同步 ----------------
+   桌宠与 DSH 各存一份 settings，结构不一样，这里只搬运语义相同的字段：
+   读改写 DSH 的 pet-plugin-state.json，保留它自己的 rev 与其他状态；
+   每 5 秒拉一次，靠 settingsStamp 判断谁更新。字段表必须与插件
+   lib/settings-sync.mjs 保持一致，改一边就要改另一边。 */
+
+const SETTINGS_SYNC_THEME_TO_PET = { pink: 'SakuraPink', blue: 'OceanBlue', ink: 'Paper' }
+const SETTINGS_SYNC_THEME_TO_DSH = { SakuraPink: 'pink', OceanBlue: 'blue', Paper: 'ink' }
+const SETTINGS_SYNC_RENDER_TO_PET = { sprite: 'embedded', live2d: 'live2d' }
+const SETTINGS_SYNC_RENDER_TO_DSH = { embedded: 'sprite', live2d: 'live2d' }
+
+const SETTINGS_SYNC_FIELDS = [
+  { dsh: 'nickname', pet: 'nickname', type: 'string', maxLength: 24 },
+  { dsh: 'ui', pet: 'uiMode', type: 'enum', values: ['pet', 'card'] },
+  { dsh: 'theme', pet: 'theme.preset', type: 'enum', values: ['pink', 'blue', 'ink'],
+    toPet: (v) => SETTINGS_SYNC_THEME_TO_PET[v] ?? 'SakuraPink',
+    toDsh: (v) => SETTINGS_SYNC_THEME_TO_DSH[v] ?? 'pink' },
+  { dsh: 'renderer', pet: 'renderMode', type: 'enum', values: ['sprite', 'live2d'],
+    toPet: (v) => SETTINGS_SYNC_RENDER_TO_PET[v] ?? 'embedded',
+    toDsh: (v) => SETTINGS_SYNC_RENDER_TO_DSH[v] ?? 'sprite' },
+  { dsh: 'scale', pet: 'window.scale', type: 'number', min: 0.6, max: 1.8 },
+  { dsh: 'bubbleMode', pet: 'bubble.mode', type: 'enum', values: ['rotate', 'info', 'talk', 'today'] },
+  { dsh: 'bubbleFont', pet: 'bubble.fontSize', type: 'number', min: 11, max: 20 },
+  { dsh: 'bubbleWidth', pet: 'bubble.width', type: 'number', min: 0, max: 600 },
+  { dsh: 'bubbleStickerSize', pet: 'bubble.stickerSize', type: 'number', min: 24, max: 160 },
+  { dsh: 'bubbleRadius', pet: 'bubble.radius', type: 'number', min: 0, max: 28 },
+  { dsh: 'bubbleAlpha', pet: 'bubble.alpha', type: 'number', min: 0.5, max: 1 },
+  { dsh: 'showHud', pet: 'showHud', type: 'bool' },
+  { dsh: 'hudDetail', pet: 'hudDetail', type: 'enum', values: ['full', 'simple', 'simple2'] },
+  { dsh: 'hudAlpha', pet: 'hudAlpha', type: 'number', min: 0.4, max: 1 },
+  { dsh: 'speechEnabled', pet: 'voice.enabled', type: 'bool' },
+  { dsh: 'speechProvider', pet: 'voice.provider', type: 'enum', values: ['system', 'local'] },
+  { dsh: 'ttsEndpoint', pet: 'voice.localUrl', type: 'string', maxLength: 300 },
+  { dsh: 'soundVolume', pet: 'voice.volume', type: 'number', min: 0, max: 1 },
+  { dsh: 'outline', pet: 'presence.outline', type: 'enum', values: ['light', 'dark', 'auto', 'none'] },
+  { dsh: 'poseSeconds', pet: 'poseEverySeconds', type: 'number', min: 0, max: 600 },
+  { dsh: 'askEveryMinutes', pet: 'askEveryMinutes', type: 'number', min: 0, max: 480 },
+  { dsh: 'askHandling', pet: 'askHandling', type: 'enum', values: ['pet-all', 'pet-single', 'both', 'web'] },
+  { dsh: 'memoryEnabled', pet: 'companion.memory.enabled', type: 'bool' },
+  { dsh: 'qq.enabled', pet: 'channels.qq.enabled', type: 'bool' },
+  { dsh: 'qq.appId', pet: 'channels.qq.appId', type: 'string', maxLength: 64 }
+]
+
+const dshStatePath = () => path.join(app.getPath('userData'), 'pet-plugin-state.json')
+
+function syncReadPath(source, pathText) {
+  if (source === null || typeof source !== 'object') return undefined
+  let cursor = source
+  for (const part of String(pathText).split('.')) {
+    if (cursor === null || typeof cursor !== 'object') return undefined
+    cursor = cursor[part]
   }
-  await writeJsonAtomic(settingsPath, value)
+  return cursor
+}
+
+function syncWritePath(target, pathText, value) {
+  const parts = String(pathText).split('.')
+  const last = parts.pop()
+  let cursor = target
+  for (const part of parts) {
+    if (cursor[part] === null || typeof cursor[part] !== 'object' || Array.isArray(cursor[part])) {
+      cursor[part] = {}
+    }
+    cursor = cursor[part]
+  }
+  cursor[last] = value
+  return target
+}
+
+function syncSameValue(a, b) {
+  if (typeof a === 'object' && a !== null) return JSON.stringify(a) === JSON.stringify(b)
+  return a === b
+}
+
+function syncNormalize(field, raw) {
+  if (raw === undefined || raw === null) return undefined
+  if (field.type === 'bool') return raw === true || raw === 'true'
+  if (field.type === 'number') {
+    const n = Number(raw)
+    if (!Number.isFinite(n)) return undefined
+    if (field.min !== undefined && n < field.min) return field.min
+    if (field.max !== undefined && n > field.max) return field.max
+    return n
+  }
+  if (field.type === 'enum') return field.values.includes(raw) ? raw : undefined
+  return String(raw).slice(0, field.maxLength ?? 400)
+}
+
+/**
+ * 按当前 settings 重设主窗口尺寸：保留左上角坐标，新尺寸夹回工作区。
+ * 设置页的缩放滑杆和 DSH 同步过来的 scale 都走这里，避免两套逻辑。
+ */
+function reapplyMainWindowSize() {
+  if (win === null || win.isDestroyed()) return false
+  const next = createWindowOptions(settings, path.join(__dirname, 'preload.cjs'))
+  const [x, y] = win.getPosition()
+  const bounds = { x, y, width: next.width, height: next.height }
+  win.setBounds(clampBoundsToWorkArea(bounds, screen.getDisplayMatching(bounds).workArea))
+  void saveWindowState()
+  return true
+}
+
+let settingsSyncTimer = null
+let settingsPushTimer = null
+let settingsSyncBusy = false
+let lastAppliedSettingsStamp = 0
+
+/** 从 DSH 拉一次：只覆盖映射字段，其余设置保持桌宠自己的。 */
+async function pullSettingsFromDsh(force = false) {
+  if (settingsSyncBusy) return false
+  let remote = null
+  try {
+    remote = await readJsonFile(dshStatePath())
+  } catch {
+    return false
+  }
+  if (remote === null || typeof remote !== 'object') return false
+  if (remote.settingsSync === false) return false
+  const stamp = Number(remote.settingsStamp ?? 0)
+  if (!Number.isFinite(stamp)) return false
+  if (!force && stamp <= lastAppliedSettingsStamp) return false
+  settingsSyncBusy = true
+  try {
+    let changed = false
+    for (const field of SETTINGS_SYNC_FIELDS) {
+      const value = syncNormalize(field, syncReadPath(remote, field.dsh))
+      if (value === undefined) continue
+      const converted = field.toPet ? field.toPet(value) : value
+      if (converted === undefined) continue
+      if (syncSameValue(syncReadPath(settings, field.pet), converted)) continue
+      syncWritePath(settings, field.pet, converted)
+      changed = true
+    }
+    lastAppliedSettingsStamp = stamp
+    if (changed) {
+      await writeSettings(settings)
+      broadcastSettings(settings)
+      /* 尺寸类字段（scale / profile）必须当场重设窗口，否则 DSH 里拖缩放只会写盘，
+         立绘看起来完全没反应。 */
+      reapplyMainWindowSize()
+      log('[settings-sync] 已从 DSH 取到更新的设置')
+    }
+    return changed
+  } finally {
+    settingsSyncBusy = false
+  }
+}
+
+/** 把桌宠这边改过的字段写回 DSH；写前留一份 .sync.bak，失败只记日志。 */
+async function pushSettingsToDsh() {
+  const target = dshStatePath()
+  let remote = null
+  try {
+    remote = await readJsonFile(target)
+  } catch {
+    /* DSH 没装或状态还没建，等下一轮 */
+    return false
+  }
+  if (remote === null || typeof remote !== 'object') return false
+  if (remote.settingsSync === false) return false
+  let changed = false
+  for (const field of SETTINGS_SYNC_FIELDS) {
+    const value = syncNormalize(field, syncReadPath(settings, field.pet))
+    if (value === undefined) continue
+    const converted = field.toDsh ? field.toDsh(value) : value
+    if (converted === undefined) continue
+    if (syncSameValue(syncReadPath(remote, field.dsh), converted)) continue
+    syncWritePath(remote, field.dsh, converted)
+    changed = true
+  }
+  if (!changed) return false
+  remote.settingsStamp = Math.max(Date.now(), Number(remote.settingsStamp ?? 0) + 1)
+  lastAppliedSettingsStamp = remote.settingsStamp
+  try {
+    await writeJsonAtomic(`${target}.sync.bak`, await readJsonFile(target).catch(() => null))
+    await writeJsonAtomic(target, remote)
+    log('[settings-sync] 已把本地改动写回 DSH')
+    return true
+  } catch (error) {
+    log('[settings-sync] 写回 DSH 失败：', error?.message ?? error)
+    return false
+  }
+}
+
+/** 设置刚写完，稍等一下再推：一次拖动会连续写很多次。 */
+function scheduleSettingsPush() {
+  if (settingsPushTimer !== null) clearTimeout(settingsPushTimer)
+  settingsPushTimer = setTimeout(() => {
+    settingsPushTimer = null
+    void pushSettingsToDsh()
+  }, 800)
+  settingsPushTimer.unref?.()
+}
+
+function startSettingsSync() {
+  if (settingsSyncTimer !== null) return
+  void pullSettingsFromDsh(true)
+  settingsSyncTimer = setInterval(() => {
+    void pullSettingsFromDsh()
+  }, 5000)
+  settingsSyncTimer.unref?.()
 }
 
 async function writeJson(file, value) {
@@ -2471,6 +3196,18 @@ async function writeJsonAtomic(file, value) {
 let balanceLedgerStore = null
 /** 轮询器；设置变更时 updateInterval，退出时 stop。 */
 let balanceMonitor = null
+/** 最近一次抓到的余额；心情与提醒用它判断「是不是真的低」，不把「设过阈值」当低。 */
+let lastFetchedBalance = null
+
+/** 此刻余额是不是真的低于阈值；没抓过、没设阈值、余额模块没开都按否。 */
+function balanceLowNow() {
+  const enabled = settings?.modules?.['builtin.balance']?.enabled === true
+  if (!enabled) return false
+  const threshold = Number(settings?.balance?.threshold)
+  if (!Number.isFinite(threshold) || threshold <= 0) return false
+  if (lastFetchedBalance === null || !Number.isFinite(lastFetchedBalance)) return false
+  return lastFetchedBalance <= threshold
+}
 
 function ensureBalanceStore() {
   if (balanceLedgerStore === null) {
@@ -2537,10 +3274,12 @@ async function fetchBalanceSnapshot() {
     failure.code = 'balance-missing'
     throw failure
   }
+  lastFetchedBalance = balance
 
   return {
     balance,
-    threshold: settings.balance.threshold,
+    // 老配置可能没有 balance 段：读取用可选链，缺字段只影响提醒阈值，不影响抓取。
+    threshold: Number(settings?.balance?.threshold),
     fetchedAt: Date.now(),
     isAvailable: payload?.is_available === true,
     currency: typeof cny?.currency === 'string' ? cny.currency : 'CNY',
@@ -2566,11 +3305,11 @@ function syncBalanceMonitor() {
       fetchBalance: fetchBalanceSnapshot,
       intervalMs,
       onAlert: (alert) =>
-        sendBubble(
-          `余额只剩 ${alert.balance.toFixed(2)} 元，低于 ${alert.threshold} 元啦。`,
-          null,
-          { ackSegment: alert.segment }
-        ),
+        speakOut({
+          text: `余额只剩 ${alert.balance.toFixed(2)} 元，低于 ${alert.threshold} 元啦。`,
+          ackSegment: alert.segment,
+          origin: 'notice'
+        }),
       onError: (error) => log('[balance]', error?.code ?? error)
     })
     balanceMonitor.start()
@@ -2788,6 +3527,20 @@ async function createGateway() {
               senderOpenId: info.senderOpenId,
               msgId: info.msgId
             })
+            // 群友的群消息（含 @ 她的那几条）：入站就写进群记忆，不接话也留上下文。
+            // 被叫到的那几句不再缺档——她回复与否，群里连续对话的脉络都在。
+            if (info.isOwner !== true && typeof info.content === 'string' && info.content !== '' && memoryEnabled()) {
+              const inboundSource = {
+                channel: 'qq',
+                chatType: 'group',
+                openId: info.openId,
+                senderOpenId: info.senderOpenId,
+                msgId: info.msgId,
+                isOwner: false
+              }
+              const inboundWho = describeSpeaker(inboundSource) || '群友'
+              memoryStore.appendTurn('user', `［QQ 群聊｜${inboundWho}］${info.content}`, Date.now(), inboundSource, groupScope)
+            }
           }
           // 主人自己的话走正常回复，不再抢一次主动开口；
           // 被 @ 的消息已经走回复通道，同样跳过；
@@ -2894,14 +3647,19 @@ async function createGateway() {
         response.writeHead(404).end()
         return
       }
-      let body = ''
+      // 用 Buffer.concat 收齐再解码：一个多字节汉字跨 chunk 时，
+      // 逐个 toString 会把它切成替换字符，验签或 JSON 解析偶发失败。
+      const chunks = []
+      let total = 0
       for await (const chunk of request) {
-        body += chunk
-        if (body.length > 64 * 1024) {
+        chunks.push(chunk)
+        total += chunk.length
+        if (total > 64 * 1024) {
           response.writeHead(413).end()
           return
         }
       }
+      const body = Buffer.concat(chunks, total).toString('utf8')
       try {
         const result = await qq.handleWebhook(body, request.headers)
         response.writeHead(200, { 'content-type': 'application/json' })
@@ -3093,6 +3851,22 @@ async function initVault() {
 
     secretStore = new VaultServiceSecretStore(store)
     await migrateLegacySettingsKey(secretStore)
+    // SMTP 密码同样不留在明文设置里：迁移进加密仓库，设置只留空位。
+    // 迁移失败也不致命：发送时始终优先读加密仓库，明文只作兜底。
+    try {
+      const smtpPass = settings?.mail?.smtp?.pass
+      if (typeof smtpPass === 'string' && smtpPass !== '') {
+        await secretStore.set('mail', 'smtp.pass', smtpPass)
+        const next = structuredClone(settings)
+        if (next.mail?.smtp !== null && typeof next.mail?.smtp === 'object') {
+          next.mail.smtp.pass = ''
+        }
+        await writeSettings(next)
+        log('[mail] SMTP 密码已迁移进加密仓库')
+      }
+    } catch (error) {
+      log('[mail] SMTP 密码迁移失败，保留明文兜底', String(error?.message ?? error))
+    }
     const diagnostic = await vault.diagnose()
     log(
       'vault 已装配：',
@@ -3120,6 +3894,16 @@ async function initVault() {
 
     const memoryLoaded = await memoryStore.load()
     log('记忆已加载：', JSON.stringify(memoryLoaded))
+
+    // 说话习惯的旧明文不等人来聊天：启动时读一次、换成密文、再删掉旧的。
+    // vault 这会儿已经装配好，seal 可用；失败就保留旧文件，下次启动再试。
+    try {
+      await speechHabits.load()
+      const habitSaved = await speechHabits.flush()
+      if (habitSaved.ok !== true) log('[habits] 启动迁移未完成：', habitSaved.error ?? '')
+    } catch (error) {
+      log('[habits] 启动迁移失败：', String(error?.message ?? error))
+    }
     // 记忆整理：启动时先扫一次，之后每天一次。只归档久未想起的原文，
     // 事实和经验不动，归档内容仍留在磁盘上、管理页可查。
     if (memoryLoaded.ok) {
@@ -3181,9 +3965,44 @@ function syncHudSampler() {
 }
 
 /**
+ * 把桌宠设置里插件认识的字段同步过去。
+ *
+ * 插件那边是另一份 state，桌宠改了设置它不会自己知道。走 pet-command.json 的
+ * state 动作写回，插件按 patch 浅合并，没提交的字段保留原值。
+ */
+async function syncPluginSettings(next) {
+  if (next === null || typeof next !== 'object') return
+  const patch = {}
+  if (typeof next.nickname === 'string') patch.nickname = next.nickname
+  if (Number.isFinite(next.window?.scale)) patch.scale = next.window.scale
+  if (typeof next.bubble?.mode === 'string') patch.bubbleMode = next.bubble.mode
+  if (Number.isFinite(next.bubble?.radius)) patch.bubbleRadius = next.bubble.radius
+  if (Number.isFinite(next.bubble?.alpha)) patch.bubbleAlpha = next.bubble.alpha
+  if (typeof next.bubble?.fontFamily === 'string') patch.bubbleFont = next.bubble.fontFamily
+  if (typeof next.askHandling === 'string') patch.askHandling = next.askHandling
+  if (Number.isFinite(next.askEveryMinutes)) patch.askEveryMinutes = next.askEveryMinutes
+  if (Number.isFinite(next.poseEverySeconds)) patch.poseSeconds = next.poseEverySeconds
+  if (Number.isFinite(next.soundLevel)) patch.soundVolume = next.soundLevel
+  if (typeof next.voice?.enabled === 'boolean') patch.speechEnabled = next.voice.enabled
+  if (typeof next.voice?.provider === 'string') patch.speechProvider = next.voice.provider
+  if (Object.keys(patch).length === 0) return
+
+  const target = path.join(app.getPath('userData'), 'pet-command.json')
+  const temp = `${target}.tmp`
+  await fs.writeFile(temp, JSON.stringify({ action: 'state', patch }), 'utf8')
+  await fs.rename(temp, target)
+}
+
+/**
  * 设置变更广播给所有窗口；主界面靠它即时更新气泡 / HUD，不必重启。
  */
 function broadcastSettings(next) {
+  // 设置一变就跟着启停 DSH 念出监听，省得让用户重启。
+  syncDshSpeech(next?.voice)
+  // 插件在跑时顺手把设置送过去；不在跑时这个文件没人读，写了也不留痕。
+  void syncPluginSettings(next).catch((error) => {
+    log('[plugin] 设置同步失败', error instanceof Error ? error.message : String(error))
+  })
   for (const target of [win, settingsWin, chatWin]) {
     if (target !== null && !target.isDestroyed()) {
       target.webContents.send('pet:settings:changed', next)
@@ -3247,15 +4066,23 @@ async function initSettingsSync() {
 
 /**
  * pet-media://<host>/<相对路径> → 对应根目录下的真实文件。
- * 四个 host：
+ * 五个 host：
  *   model → mediaRoot（userData/models，Live2D 模型）
  *   asset → assetsRoot（随包表情与立绘）
  *   pack  → packsRoot（用户导入）或内置包根（builtin- 前缀）
  *   inbox → packsRoot/.inbox（QQ 偷图待审核，单层文件名）
+ *   background → userData/backgrounds（DSH 背景库，插件上传的那一份）
  * 解析后必须仍在对应根内 —— 挡住 ../ 穿越读别处的文件。
  */
 function registerMediaProtocol() {
-  const roots = { model: mediaRoot, asset: assetsRoot, pack: packsRoot }
+  // backgrounds 跟着 userData 走：桌宠用 --user-data-dir 指到插件状态目录，
+  // 所以这里读到的正好是插件存背景的同一份文件。
+  const roots = {
+    model: mediaRoot,
+    asset: assetsRoot,
+    pack: packsRoot,
+    background: path.join(app.getPath('userData'), 'backgrounds'),
+  }
 
   protocol.handle('pet-media', async (request) => {
     let target
@@ -3334,6 +4161,7 @@ function registerMediaProtocol() {
   log('[media] pet-media://model →', mediaRoot)
   log('[media] pet-media://asset →', assetsRoot)
   log('[media] pet-media://pack →', packsRoot)
+  log('[media] pet-media://background →', roots.background)
 }
 
 /**
@@ -3341,17 +4169,64 @@ function registerMediaProtocol() {
  * 未登记的通道在这里直接抛错，避免「能调但不在清单里」的灰通道。
  */
 const registeredChannels = new Set()
+/** 注册失败的通道单独记账；一条拼错不该让整条装配链断掉、让桌宠白屏。 */
+const channelErrors = []
 
 function registerChannel(channel, listener) {
-  assertChannel(channel)
-  if (registeredChannels.has(channel)) {
-    throw new Error(`IPC 通道重复注册：${channel}`)
+  try {
+    assertChannel(channel)
+    if (registeredChannels.has(channel)) {
+      throw new Error(`IPC 通道重复注册：${channel}`)
+    }
+    // 先注册成功再记账：handle 抛错时不把名字留在 Set 里，重试不会被自己挡住。
+    ipcMain.handle(channel, listener)
+    registeredChannels.add(channel)
+  } catch (error) {
+    const message = error?.message ?? String(error)
+    channelErrors.push({ channel, message })
+    log(`[ipc] 通道注册失败 ${channel}：${message}`)
   }
-  registeredChannels.add(channel)
-  ipcMain.handle(channel, listener)
 }
 
 function registerIpc() {
+  /*
+   * 人格问卷：题库与计分只在 lib/companion/persona/persona-assessment.mjs 里维护一份。
+   * 渲染进程拿 schema 渲题、把答案交回来算；主进程不重复实现量表。
+   */
+  registerChannel('pet:assessment:schema', () => assessmentSchema())
+  registerChannel('pet:assessment:score', (_event, answers) => scoreAssessment(answers))
+  registerChannel('pet:assessment:save', async (_event, payload) => {
+    const answers =
+      payload !== null &&
+      typeof payload === 'object' &&
+      payload.answers !== null &&
+      typeof payload.answers === 'object'
+        ? payload.answers
+        : {}
+
+    const result = scoreAssessment(answers)
+    const previous = settings?.persona?.assessment ?? null
+    const record = {
+      version: 1,
+      answers,
+      result,
+      previousResult: previous?.result ?? null,
+      comparison:
+        previous?.result === undefined || previous?.result === null
+          ? null
+          : compareAssessments(previous.result, result),
+      updatedAt: new Date().toISOString()
+    }
+
+    // 整个 settings 原样写回：只多一个 persona.assessment 字段，其他配置不动。
+    settings = {
+      ...settings,
+      persona: { ...(settings?.persona ?? {}), assessment: record }
+    }
+    await writeSettings(settings)
+    return { ok: true, assessment: record }
+  })
+
   // 无副作用查询通道集中注册；写操作仍留在下方，阶段二再迁 ipc/mutations.ts。
   registerQueryChannels({
     registerChannel,
@@ -3684,7 +4559,7 @@ function registerIpc() {
 
   registerChannel('pet:daily:run', async () => {
     const result = await runDailyReviewOnce()
-    if (result.ok) sendBubble(result.summary)
+    if (result.ok) speakOut({ text: result.summary, scene: 'moments', origin: 'notice' })
     return result
   })
 
@@ -3692,16 +4567,42 @@ function registerIpc() {
   registerChannel('pet:presence:speak', async (_event, reason) => {
     if (settings?.presence?.aiEnabled !== true) return { ok: false, reason: 'disabled' }
     presenceService.noteContact()
-    const result = await presenceService.nextLine(typeof reason === 'string' ? reason : 'manual')
-    if (typeof result.line === 'string' && result.line !== '')
-      sendBubble(result.line, result.motion, { emojiId: result.emojiId })
-    return result
+    // 模型超时、密钥缺失都会转成结构化结果；任何异常都不能让 IPC 裸奔成 rejected。
+    try {
+      const result = await presenceService.nextLine(typeof reason === 'string' ? reason : 'manual')
+      if (typeof result.line === 'string' && result.line !== '') {
+        // scene 仍走 autonomous：dshScenes 是白名单，换成没登记的 'manual'
+        // 会让 speechFor 拿不到开关直接返回 null，单击说话就静默失去语音了。
+        // origin='onDemand'：记冷却与去重池、写记忆，但不占每日额度、不进未回应队列，
+        // 用户正在互动，不该被记成「说了没人理」而触发收场。
+        speakOut({
+          text: result.line,
+          motion: result.motion,
+          emojiId: result.emojiId,
+          scene: 'autonomous',
+          origin: 'onDemand',
+          reason: 'manual'
+        })
+      }
+      return result
+    } catch (error) {
+      log('[presence] 点击说话异常：', error instanceof Error ? error.message : String(error))
+      return { ok: false, reason: 'error', message: error?.message ?? String(error) }
+    }
   })
 
 
   registerChannel('pet:reflection:run', async () => {
     const result = await runDailyReviewOnce()
-    const impressions = buildReflection({ review: result.review })
+    // 印象要落在真实断言上：读不到结构化记忆就当没有，不编造。
+    let facts = []
+    try {
+      await factStore.load()
+      facts = factStore.snapshot('desktop').facts
+    } catch (error) {
+      log('[reflection] 读取结构化记忆失败，按空记忆继续：', String(error))
+    }
+    const impressions = buildReflection({ review: result.review, facts })
     const markdown = renderReflectionMarkdown({
       date: result.review.date,
       impressions,
@@ -3728,11 +4629,20 @@ function registerIpc() {
   /**
    * 鼠标穿透：默认关，只在调试口 / 将来的托盘开关里调用。
    * 本轮不设设置页 UI —— 开了以后点不到桌宠，必须先想清楚怎么关回来。
+   * 只认严格布尔：渲染层传字符串 "false" 绝不能变成 true。
    */
   registerChannel('pet:window:setClickThrough', (_event, enabled) => {
-    const value = Boolean(enabled)
+    const value = enabled === true
     win?.setIgnoreMouseEvents(value, { forward: true })
     return value
+  })
+
+  // 像素级穿透：渲染层 elementFromPoint 命中气泡/立绘时传 true，落在透明区传 false。
+  // 主进程只做 setIgnoreMouseEvents 切换，不判断命中；forward 基线保证 mousemove 始终进得来。
+  registerChannel('pet:window:setPixelHit', (_event, interactive) => {
+    const on = Boolean(interactive)
+    win?.setIgnoreMouseEvents(!on, { forward: true })
+    return on
   })
 
   registerChannel('pet:window:setAlwaysOnTop', (_event, enabled) => {
@@ -3744,6 +4654,42 @@ function registerIpc() {
   registerChannel('pet:settings:open', (_event, payload) => {
     openSettingsWindow(payload?.panel)
     return true
+  })
+
+  // 观察台的贴近时刻开关：只接受 QQ 私聊会话，桌面与群聊不由外部改写。
+  // 关掉只是不再触发，不影响已经说过的话；开着也要过次数、冷却与红线。
+  registerChannel('pet:insight:set-intimacy', async (_event, payload = {}) => {
+    const target = typeof payload.scope === 'string' ? payload.scope.trim() : ''
+    if (!target.startsWith('qq:private:')) return { ok: false, reason: 'scope' }
+    const peers = { ...(settings?.companion?.intimacy?.peers ?? {}) }
+    peers[target] = payload.enabled === true
+    settings = mergeLayer(settings, { companion: { intimacy: { peers } } })
+    await writeSettings(settings)
+    return { ok: true, scope: target, enabled: payload.enabled === true }
+  })
+
+  /* 观察台读的是她写出的快照，改不了她加密的状态。
+     所以这里只投递一条意图，等她下一轮开口前自己落进状态里。 */
+  registerChannel('pet:insight:set-friction', async (_event, payload = {}) => {
+    const scope = typeof payload.scope === 'string' ? payload.scope.trim() : ''
+    const allowed =
+      scope === 'desktop' || scope.startsWith('qq:private:') || scope.startsWith('qq:group:')
+    if (!allowed) return { ok: false, reason: 'scope' }
+    const value = Number(payload.value)
+    if (!Number.isFinite(value)) return { ok: false, reason: 'value' }
+    const file = path.join(app.getPath('home'), '.cyrene-pet', 'friction-intent.json')
+    const intent = {
+      scope,
+      value: Math.round(Math.min(100, Math.max(0, value))),
+      at: Date.now()
+    }
+    try {
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      await fs.writeFile(file, JSON.stringify(intent), 'utf8')
+      return { ok: true, scope, value: intent.value, pending: true }
+    } catch {
+      return { ok: false, reason: 'write-failed' }
+    }
   })
 
   registerChannel('pet:qq:status', () => {
@@ -3763,6 +4709,45 @@ function registerIpc() {
       lastInboundOpenId: qqRuntime.lastInboundOpenId,
       lastInboundAt: qqRuntime.lastInboundAt
     }
+  })
+
+  /*
+   * 会话页的 QQ 部分：只给主人相关会话的最近消息，不做全量导出。
+   * qq 未建起来时返回空列表，页面自己显示「通道未连接」。
+   */
+  registerChannel('pet:qq:conversations', () => {
+    const owners = Array.isArray(settings?.channels?.qq?.ownerOpenIds)
+      ? settings.channels.qq.ownerOpenIds
+      : []
+    const conversations = []
+    for (const owner of owners) {
+      const id = String(owner ?? '').trim()
+      if (id === '') continue
+      let messages = []
+      if (qq !== null && typeof qq.recentMessages === 'function') {
+        try {
+          const recent = qq.recentMessages(id, 60)
+          if (Array.isArray(recent)) messages = recent.slice(-60)
+        } catch {
+          messages = []
+        }
+      }
+      conversations.push({ id, messages })
+    }
+    return {
+      ok: true,
+      enabled: qqRuntime.enabled,
+      state: qqRuntime.state,
+      reason: qqRuntime.reason,
+      observeOnly: qqRuntime.observeOnly,
+      lastInboundAt: qqRuntime.lastInboundAt,
+      conversations
+    }
+  })
+
+  registerChannel('pet:sessions:open', (payload) => {
+    openSessionsWindow(typeof payload?.tab === 'string' ? payload.tab : undefined)
+    return { ok: true }
   })
 
   // 运行状态四张卡片一次取齐：QQ / 记忆 / 今天主动 / 上次反思。
@@ -3830,7 +4815,10 @@ function registerIpc() {
   // 一键绑定：把最近一条入站消息的发送者写进主人名单，并立刻重建网关。
   // 没有入站记录时明确回 no-inbound，让界面提示「先去 QQ 发一条」。
   registerChannel('pet:qq:bind-owner', async () => {
-    const openId = qqRuntime.lastInboundOpenId.trim()
+    // 网关还没收到过任何入站消息时该字段是 undefined：先兜住，再报 no-inbound。
+    const lastInbound = typeof qqRuntime?.lastInboundOpenId === 'string' ? qqRuntime.lastInboundOpenId.trim() : ''
+    if (lastInbound === '') return { ok: false, reason: 'no-inbound' }
+    const openId = lastInbound
     if (openId === '') return { ok: false, reason: 'no-inbound' }
     const qqSettings = settings.channels?.qq ?? DEFAULT_SETTINGS.channels.qq
     const owners = [...(qqSettings.ownerOpenIds ?? [])]
@@ -3856,6 +4844,104 @@ function registerIpc() {
   registerChannel('pet:ability:open', () => {
     openAbilityWindow()
     return true
+  })
+
+  // B 站浏览：搜索 / 详情 / 打开 / 写操作 / 读文章。写操作默认全关，危险动作二次确认。
+  registerChannel('pet:bili:search', async (_event, payload) => {
+    try {
+      return { ok: true, result: await biliSearch(String(payload?.keyword ?? '')) }
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  registerChannel('pet:bili:videoInfo', async (_event, payload) => {
+    try {
+      return { ok: true, result: await biliVideoInfo(String(payload?.bvid ?? '')) }
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  registerChannel('pet:bili:open', (_event, payload) => {
+    openBiliWindow(String(payload?.url ?? ''))
+    return true
+  })
+  registerChannel('pet:bili:write', async (_event, payload) => {
+    try {
+      return await biliWrite(
+        String(payload?.action ?? ''),
+        payload?.params ?? {},
+        payload?.confirmed === true,
+        payload?.confirmNonce,
+        true
+      )
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  registerChannel('pet:bili:article', async (_event, payload) => {
+    try {
+      return { ok: true, result: await biliArticle(String(payload?.url ?? '')) }
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  registerChannel('pet:bili:subtitleList', async (_event, payload) => {
+    try {
+      const bvid = String(payload?.bvid ?? '')
+      const cid = Number(payload?.cid ?? 0)
+      if (cid <= 0) return { ok: false, message: '需要有效的 cid' }
+      return { ok: true, result: await biliSubtitleList(bvid, cid) }
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  registerChannel('pet:bili:transcript', async (_event, payload) => {
+    try {
+      const url = String(payload?.url ?? '')
+      if (url === '') return { ok: false, message: '需要字幕地址' }
+      return { ok: true, result: await biliTranscript(url) }
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  registerChannel('pet:bili:loginStatus', async () => {
+    try {
+      return { ok: true, result: await biliLoginStatus() }
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  // 学习闭环的落库口：把提炼好的知识（kind=knowledge）写进结构化记忆。
+  // kind 白名单交给 factStore 自己校验，这里只负责透传；默认 scope=shared，跨渠道都能检索到。
+  registerChannel('pet:memory:addFacts', async (_event, payload) => {
+    try {
+      const list = Array.isArray(payload?.facts) ? payload.facts : []
+      const scope =
+        typeof payload?.scope === 'string' && payload.scope !== '' ? payload.scope : 'shared'
+      const incoming = list
+        .filter((item) => item !== null && typeof item === 'object')
+        .map((item) => ({
+          kind: typeof item.kind === 'string' && item.kind !== '' ? item.kind : 'knowledge',
+          text: String(item.text ?? '').trim(),
+          source: typeof item.source === 'string' ? item.source.slice(0, 80) : '',
+          confidence: item.confidence
+        }))
+        .filter((item) => item.text !== '')
+      if (incoming.length === 0) return { ok: false, message: '没有可写入的记忆' }
+      await factStore.load()
+      const result = factStore.upsert(incoming, Date.now(), scope)
+      return { ok: true, result }
+    } catch (error) {
+      return { ok: false, message: error?.message ?? String(error) }
+    }
+  })
+  registerChannel('pet:mail:send', async (_event, payload) => {
+    // 渲染层传来的字段全部经过 sendMail 内部校验（收件人格式、头部注入）；
+    // 这里先做长度上限，防止异常大 payload 直接进 SMTP。
+    const subject = String(payload?.subject ?? '').slice(0, 200)
+    const body = String(payload?.body ?? '').slice(0, 20_000)
+    const to = String(payload?.to ?? '').slice(0, 200)
+    return sendMail({ to, subject, body })
   })
 
   // 游戏页：设置窗里只留入口，逐项配置和记录都在这个独立窗口。
@@ -3925,6 +5011,262 @@ function registerIpc() {
     ensureGameAssistantService().plan(taskId)
   )
 
+  /*
+   * 聊天页背景：与 DSH 插件共用同一个 backgrounds 目录。
+   * 插件侧只按 id 取字节，所以这里写进去的文件它立刻就能用；
+   * 桌宠自己的 settings.json 只记「现在用哪一张」。
+   */
+  const BACKGROUND_DIR = path.join(userData, 'backgrounds')
+  /* 随包七张：只在 assets 里，不复制进用户目录，删不掉也不占空间。 */
+  const BUILTIN_BACKGROUND_DIR = path.join(assetsRoot, 'backgrounds')
+  const BUILTIN_PREFIX = 'builtin:'
+  const BACKGROUND_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif'])
+  const BACKGROUND_LIMIT = 12 * 1024 * 1024
+
+  /*
+   * 背景相关通道一律走外层的 broadcastSettings(settings)：
+   * 之前这里有个同名内层函数遮蔽了外层，改背景时语音/余额/HUD/网关的联动
+   * 全部静默失效。删掉内层定义，调用点统一传最新 settings。
+   */
+
+  /* 背景槽位：同一张图可以分别指定给不同窗口，各槽互不影响。
+     petChat=桌宠聊天窗  petSettings=桌宠设置页  petPanels=桌宠独立页面
+     dshPage=DSH 页面    dshCard=DSH 设置卡片 */
+  const BACKGROUND_SLOT_KEYS = ['petChat', 'petSettings', 'petPanels', 'dshPage', 'dshCard']
+
+  const clampUnit = (value, fallback) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return fallback
+    return Math.min(1, Math.max(0, n))
+  }
+
+  const clampBlur = (value, fallback) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return fallback
+    return Math.min(20, Math.max(0, Math.round(n)))
+  }
+
+  /**
+   * 把 background 归一化成五个槽。
+   * 老版本只有一张 background.id：槽全空时迁进聊天窗，只跑这一次；
+   * 迁移后写盘会把 id 清空，所以不会每次都重迁。
+   */
+  function normalizeBackgroundSlots(background) {
+    const raw = background ?? {}
+    const source = raw.slots ?? {}
+    const slots = {}
+    let filled = false
+    for (const key of BACKGROUND_SLOT_KEYS) {
+      const entry = source[key]
+      const id = typeof entry?.id === 'string' ? entry.id : ''
+      if (id !== '') filled = true
+      slots[key] = {
+        id,
+        dim: clampUnit(entry?.dim, clampUnit(raw.dim, 0.35)),
+        blur: clampBlur(entry?.blur, 0)
+      }
+    }
+    if (!filled && typeof raw.id === 'string' && raw.id !== '') {
+      slots.petChat = { id: raw.id, dim: clampUnit(raw.dim, 0.35), blur: 0 }
+    }
+    return slots
+  }
+
+  /* 写回时统一成 slots 结构，id 置空表示已完成迁移。 */
+  function backgroundWithSlots(slots) {
+    return { ...(settings.background ?? {}), id: '', slots }
+  }
+
+  registerChannel('pet:background:list', async () => {
+    let names = []
+    try {
+      names = await fs.readdir(BACKGROUND_DIR)
+    } catch {
+      names = []
+    }
+    const items = []
+    for (const name of names) {
+      if (!BACKGROUND_EXTS.has(path.extname(name).toLowerCase())) continue
+      try {
+        const info = await fs.stat(path.join(BACKGROUND_DIR, name))
+        if (info.isFile()) {
+          items.push({ id: name, size: info.size, addedAt: Math.round(info.mtimeMs) })
+        }
+      } catch {
+        /* 单张读不到就跳过，不影响整份清单 */
+      }
+    }
+    items.sort((a, b) => b.addedAt - a.addedAt)
+    const slots = normalizeBackgroundSlots(settings.background)
+    return { ok: true, items, slots, active: { id: slots.petChat.id, dim: slots.petChat.dim } }
+  })
+
+  registerChannel('pet:background:pick', async () => {
+    const parent = settingsWin !== null && !settingsWin.isDestroyed() ? settingsWin : win
+    const picked = await dialog.showOpenDialog(parent, {
+      title: '选一张聊天背景',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif'] }]
+    })
+    if (picked.canceled || picked.filePaths.length === 0) return { ok: false, reason: 'canceled' }
+
+    const file = picked.filePaths[0]
+    const ext = path.extname(file).toLowerCase()
+    if (!BACKGROUND_EXTS.has(ext)) return { ok: false, reason: 'unsupported' }
+
+    let bytes
+    try {
+      bytes = await fs.readFile(file)
+    } catch {
+      return { ok: false, reason: 'read-failed' }
+    }
+    if (bytes.length === 0) return { ok: false, reason: 'empty' }
+    if (bytes.length > BACKGROUND_LIMIT) return { ok: false, reason: 'too-large' }
+
+    await fs.mkdir(BACKGROUND_DIR, { recursive: true })
+    const id = `bg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}${ext}`
+    await fs.writeFile(path.join(BACKGROUND_DIR, id), bytes)
+
+    const slots = normalizeBackgroundSlots(settings.background)
+    slots.petChat = { ...slots.petChat, id }
+    settings = { ...settings, background: backgroundWithSlots(slots) }
+    await writeSettings(settings)
+    broadcastSettings(settings)
+    return { ok: true, id, bytes: bytes.length }
+  })
+
+  registerChannel('pet:background:clear', async () => {
+    // 只取消选用，不删文件：同一张图可能还想换回来。
+    settings = { ...settings, background: backgroundWithSlots({}) }
+    await writeSettings(settings)
+    broadcastSettings(settings)
+    return { ok: true }
+  })
+
+  /* 背景库页：按 id 选用已导入的图，不重新弹文件框。 */
+  registerChannel('pet:background:apply', async (id, targetSlots) => {
+    const name = String(id ?? '')
+    if (name === '' || name.includes('/') || name.includes('\\') || name.includes('..')) {
+      return { ok: false, reason: 'invalid-id' }
+    }
+    /* 内置图在 assets 里，不在用户目录，校验路径也要换一处。 */
+    const builtin = name.startsWith(BUILTIN_PREFIX)
+    const fileName = builtin ? name.slice(BUILTIN_PREFIX.length) : name
+    if (builtin) {
+      if (fileName === '' || fileName.includes('/') || fileName.includes('\\') || fileName.includes('..')) {
+        return { ok: false, reason: 'invalid-id' }
+      }
+      if (!BACKGROUND_EXTS.has(path.extname(fileName).toLowerCase())) {
+        return { ok: false, reason: 'unsupported' }
+      }
+      try {
+        const info = await fs.stat(path.join(BUILTIN_BACKGROUND_DIR, fileName))
+        if (!info.isFile()) return { ok: false, reason: 'not-found' }
+      } catch {
+        return { ok: false, reason: 'not-found' }
+      }
+    } else {
+      if (!BACKGROUND_EXTS.has(path.extname(name).toLowerCase())) {
+        return { ok: false, reason: 'unsupported' }
+      }
+      try {
+        const info = await fs.stat(path.join(BACKGROUND_DIR, name))
+        if (!info.isFile()) return { ok: false, reason: 'not-found' }
+      } catch {
+        return { ok: false, reason: 'not-found' }
+      }
+    }
+    /* 只传 id 时沿用旧语义：设到聊天窗。 */
+    const keys = Array.isArray(targetSlots)
+      ? targetSlots.filter((key) => BACKGROUND_SLOT_KEYS.includes(key))
+      : [BACKGROUND_SLOT_KEYS.includes(targetSlots) ? targetSlots : 'petChat']
+    // 全是非法槽名时如实报错，不返回「成功但什么都没做」。
+    if (keys.length === 0) return { ok: false, reason: 'bad-slots' }
+    const slots = normalizeBackgroundSlots(settings.background)
+    for (const key of keys) slots[key] = { ...slots[key], id: name }
+    settings = { ...settings, background: backgroundWithSlots(slots) }
+    await writeSettings(settings)
+    broadcastSettings(settings)
+    return { ok: true, id: name, slots: keys }
+  })
+
+  /* 删除文件；如果删的正是当前那张，顺手清掉选用。 */
+  registerChannel('pet:background:remove', async (id) => {
+    const name = String(id ?? '')
+    if (name === '' || name.includes('/') || name.includes('\\') || name.includes('..')) {
+      return { ok: false, reason: 'invalid-id' }
+    }
+    /* 内置图是随包素材，删了下次更新还会回来，直接拒绝。 */
+    if (name.startsWith(BUILTIN_PREFIX)) return { ok: false, reason: 'builtin-readonly' }
+    try {
+      await fs.rm(path.join(BACKGROUND_DIR, name), { force: true })
+    } catch {
+      return { ok: false, reason: 'remove-failed' }
+    }
+    const slots = normalizeBackgroundSlots(settings.background)
+    let cleared = false
+    for (const key of BACKGROUND_SLOT_KEYS) {
+      if (slots[key].id === name) {
+        slots[key] = { ...slots[key], id: '' }
+        cleared = true
+      }
+    }
+    if (cleared) {
+      settings = { ...settings, background: backgroundWithSlots(slots) }
+      await writeSettings(settings)
+      broadcastSettings(settings)
+    }
+    return { ok: true }
+  })
+
+  /* 读五个槽当前各自用的图。 */
+  registerChannel('pet:background:slots', async () => {
+    return { ok: true, slots: normalizeBackgroundSlots(settings.background) }
+  })
+
+  /* 设定某个槽：id 传空字符串表示这个槽不用背景。内置图（builtin:）同样支持。 */
+  registerChannel('pet:background:slot:set', async (slot, patch) => {
+    if (!BACKGROUND_SLOT_KEYS.includes(slot)) return { ok: false, reason: 'bad-slot' }
+    const slots = normalizeBackgroundSlots(settings.background)
+    const next = { ...slots[slot] }
+    if (patch !== null && typeof patch === 'object') {
+      if (typeof patch.id === 'string') {
+        const name = patch.id
+        if (name !== '') {
+          if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+            return { ok: false, reason: 'invalid-id' }
+          }
+          if (!BACKGROUND_EXTS.has(path.extname(name).toLowerCase())) {
+            return { ok: false, reason: 'unsupported' }
+          }
+          const builtin = name.startsWith(BUILTIN_PREFIX)
+          const filePath = builtin
+            ? path.join(BUILTIN_BACKGROUND_DIR, name.slice(BUILTIN_PREFIX.length))
+            : path.join(BACKGROUND_DIR, name)
+          try {
+            const info = await fs.stat(filePath)
+            if (!info.isFile()) return { ok: false, reason: 'not-found' }
+          } catch {
+            return { ok: false, reason: 'not-found' }
+          }
+        }
+        next.id = name
+      }
+      next.dim = clampUnit(patch.dim, next.dim)
+      next.blur = clampBlur(patch.blur, next.blur)
+    }
+    slots[slot] = next
+    settings = { ...settings, background: backgroundWithSlots(slots) }
+    await writeSettings(settings)
+    broadcastSettings(settings)
+    return { ok: true, slot, value: next, slots }
+  })
+
+  registerChannel('pet:background:open', () => {
+    openBackgroundsWindow()
+    return { ok: true }
+  })
+
   registerChannel('pet:settings:close', () => {
     if (settingsWin !== null && !settingsWin.isDestroyed()) settingsWin.close()
     return true
@@ -3941,6 +5283,31 @@ function registerIpc() {
     if (settingsWin.isMaximized()) settingsWin.unmaximize()
     else settingsWin.maximize()
     return true
+  })
+
+  // 语感学习：设置页要看得见「她学到了什么」，也要能逐条点头或丢掉。
+  // 列表只回短语本身和出现次数，不带原句、不带完整发送者。
+  registerChannel('pet:speech:list', async (_event, scope) => {
+    await speechHabits.load()
+    return speechHabits.list(typeof scope === 'string' ? scope : '')
+  })
+
+  registerChannel('pet:speech:resolve', async (_event, payload) => {
+    await speechHabits.load()
+    const result = speechHabits.resolve(
+      typeof payload?.scope === 'string' ? payload.scope : '',
+      typeof payload?.text === 'string' ? payload.text : '',
+      payload?.keep === true
+    )
+    if (result.ok === true) await speechHabits.flush()
+    return result
+  })
+
+  registerChannel('pet:speech:learning', async (_event, enabled) => {
+    await speechHabits.load()
+    const result = speechHabits.setLearning(enabled === true)
+    await speechHabits.flush()
+    return result
   })
 
   // 右键桌宠：原生菜单。
@@ -4010,7 +5377,16 @@ function registerIpc() {
         }
       },
       { label: '把桌宠找回来', click: () => dockPetToBottomRight() },
-      { label: '设置', click: () => openSettingsWindow('general') },
+      {
+        // B 站入口：陪看窗走独立分区 persist:cyrene-bili，登录态只存在那里；
+        // passport.bilibili.com 也在 isBiliUrl 的 bilibili.com 后缀白名单内。
+        label: '哔哩哔哩',
+        submenu: [
+          { label: '打开 B 站首页', click: () => openBiliWindow('https://www.bilibili.com') },
+          { label: '扫码登录…', click: () => openBiliWindow('https://passport.bilibili.com/login') }
+        ]
+      },
+      { label: '设置…', click: () => openSettingsWindow('general') },
       { type: 'separator' },
       { label: '退出', click: () => app.quit() }
     ])
@@ -4021,15 +5397,7 @@ function registerIpc() {
 
   // 按当前设置重设主窗口尺寸。保留左上角坐标，否则改缩放时窗口会跳走。
   // 新尺寸仍要夹回工作区：放大后右下角可能顶出屏幕。
-  registerChannel('pet:window:applySize', () => {
-    if (win === null || win.isDestroyed()) return false
-    const next = createWindowOptions(settings, path.join(__dirname, 'preload.cjs'))
-    const [x, y] = win.getPosition()
-    const bounds = { x, y, width: next.width, height: next.height }
-    win.setBounds(clampBoundsToWorkArea(bounds, screen.getDisplayMatching(bounds).workArea))
-    void saveWindowState()
-    return true
-  })
+  registerChannel('pet:window:applySize', () => reapplyMainWindowSize())
 
   registerChannel('pet:window:getSize', () => {
     if (win === null || win.isDestroyed()) return null
@@ -4069,66 +5437,80 @@ function registerIpc() {
   // screenX 也不变，算出 dx=0 就不动了。所以改为按住时记住光标与窗口的偏移，
   // 再由定时器读 getCursorScreenPoint() 反推窗口位置。
   let dragTimer = null
-  let flingTimer = null
   // 拖动开始时记下窗口尺寸：Windows 在移动过程中会按 DPI 重新算一次非客户区，
   // 每帧给窗口加 2px；只改位置的话，这点增量会一路累积成「越拖越大」。
   let dragBounds = null
+  let sizeGuardTimer = null
 
-  /** 抛掷：松手时按最后一段轨迹估速，惯性滑行 + 逐帧摩擦，撞到工作区边界反弹。 */
-  const stopFling = () => {
-    if (flingTimer !== null) {
-      clearInterval(flingTimer)
-      flingTimer = null
-    }
-  }
-
-  /** 边缘吸附：距工作区边缘 12px 内直接贴边，由 settings.window.edgeSnap 控制。 */
-  const applyEdgeSnap = () => {
-    if (win === null || win.isDestroyed()) return
-    if (!settings.window.edgeSnap) return
-    const SNAP = Math.max(4, Math.min(64, Math.round(settings.window.edgeSnapDistance ?? 12)))
-    const area = screen.getDisplayMatching(win.getBounds()).workArea
-    const [x, y] = win.getPosition()
-    const [w, h] = win.getSize()
-    let nextX = x
-    let nextY = y
-    if (Math.abs(x - area.x) <= SNAP) nextX = area.x
-    else if (Math.abs(area.x + area.width - (x + w)) <= SNAP) nextX = area.x + area.width - w
-    if (Math.abs(y - area.y) <= SNAP) nextY = area.y
-    else if (Math.abs(area.y + area.height - (y + h)) <= SNAP) nextY = area.y + area.height - h
-    if (nextX !== x || nextY !== y) win.setPosition(nextX, nextY)
+  /**
+   * 窗口尺寸的唯一真值：由设置里的比例预设算出。
+   * 拖动结束和周期守卫都按它对，不去读可能已经被系统改过的当前尺寸。
+   */
+  const petWindowSize = () => {
+    const next = createWindowOptions(settings, path.join(__dirname, 'preload.cjs'))
+    return { width: next.width, height: next.height }
   }
 
   registerChannel('pet:window:dragStart', () => {
     if (win === null || win.isDestroyed()) return false
-    stopFling()
     if (dragTimer !== null) return true
     const cursor = screen.getCursorScreenPoint()
     const [wx, wy] = win.getPosition()
+    const { width: ww, height: wh } = petWindowSize()
     const offsetX = cursor.x - wx
     const offsetY = cursor.y - wy
-    // 拖动期间只改位置。setResizable / getSize / setBounds 都会让 Windows
-    // 重新计算窗口外框，透明窗口跟着重绘时就会闪一下、并露出边缘白条。
+    // 拖动期间连尺寸一起写回。transparent + frame:false 的窗口在 Windows 上
+    // 每执行一次 SetWindowPos 都会重算一遍非客户区，宽高各涨一点；只写位置时
+    // 这点增量会留在下次拖动里，表现就是「越拖越大，还往右下漂」。
+    // 这里把开始时的尺寸锁进每一帧的 setBounds，松手后再兜一次。
+    dragBounds = { width: ww, height: wh }
     dragTimer = setInterval(() => {
       if (win === null || win.isDestroyed()) return
       const point = screen.getCursorScreenPoint()
-      win.setPosition(Math.round(point.x - offsetX), Math.round(point.y - offsetY))
+      win.setBounds(
+        {
+          x: Math.round(point.x - offsetX),
+          y: Math.round(point.y - offsetY),
+          width: dragBounds.width,
+          height: dragBounds.height
+        },
+        false
+      )
     }, 16)
     return true
   })
 
-  registerChannel('pet:window:dragEnd', (_event, velocity) => {
+  registerChannel('pet:window:dragEnd', () => {
     if (dragTimer !== null) {
       clearInterval(dragTimer)
       dragTimer = null
     }
     if (win === null || win.isDestroyed()) return false
 
+    // 松手再校一次尺寸。拖动期间可能被系统改过一两像素，
+    // 这里按拖动开始时记下的值写回，避免下一次拖动从更大的尺寸起步。
+    if (dragBounds !== null) {
+      const [x, y] = win.getPosition()
+      win.setBounds({ x, y, width: dragBounds.width, height: dragBounds.height }, false)
+      dragBounds = null
+    }
     // 松手就停在原地：不做惯性滑行，也不自动贴边。
-    dragBounds = null
-    stopFling()
     return true
   })
+
+  // 尺寸兜底：无边框透明窗口偶尔会被系统改掉一两像素。
+  // 每分钟对一次设置里的目标值，差值超过 2px 才写回，避免无谓重绘。
+  if (sizeGuardTimer === null) {
+    sizeGuardTimer = setInterval(() => {
+      if (win === null || win.isDestroyed() || dragTimer !== null) return
+      const target = petWindowSize()
+      const [w, h] = win.getSize()
+      if (Math.abs(w - target.width) <= 2 && Math.abs(h - target.height) <= 2) return
+      const [x, y] = win.getPosition()
+      win.setBounds({ x, y, width: target.width, height: target.height }, false)
+      log('[window] 尺寸回弹', `${w}x${h}`, '->', `${target.width}x${target.height}`)
+    }, 60000)
+  }
 
   registerChannel('pet:ask', async (_event, request) => {
     if (typeof request !== 'object' || request === null) {
@@ -4152,6 +5534,34 @@ function registerIpc() {
       throw new Error('审批请求必须是对象')
     }
     return gateway.resolve(String(request.id ?? ''), request.action ?? 'dismiss', request.answer)
+  })
+
+  // —— 插件联动：DSH 插件把待办写进 live.json，桌宠把选择写回 pet-command.json ——
+  // 插件用 --user-data-dir 指向自己的状态目录，所以 userData 就是插件的 STATE_DIR。
+  // 两边都只碰这两个文件，桌宠不读插件内部状态，插件也不碰桌宠的设置。
+  const pluginStatePath = (name) => path.join(app.getPath('userData'), name)
+
+  registerChannel('pet:plugin:live', async () => {
+    try {
+      const raw = await fs.readFile(pluginStatePath('live.json'), 'utf8')
+      const parsed = JSON.parse(raw)
+      return parsed !== null && typeof parsed === 'object' ? parsed : null
+    } catch {
+      // 插件没跑、文件还没生成都走这里，不是异常状态。
+      return null
+    }
+  })
+
+  registerChannel('pet:plugin:command', async (_event, command) => {
+    if (command === null || typeof command !== 'object') {
+      throw new Error('命令必须是对象')
+    }
+    const target = pluginStatePath('pet-command.json')
+    const temp = `${target}.tmp`
+    // 先写临时文件再改名：插件按 mtime 轮询，直接覆写可能让它读到半截 JSON。
+    await fs.writeFile(temp, JSON.stringify(command), 'utf8')
+    await fs.rename(temp, target)
+    return { ok: true }
   })
 
   // 单条限 8 KiB，整份日志超 2 MiB 轮转为 .1。没有上限时，异常上报能把磁盘写满。
@@ -4282,13 +5692,20 @@ function registerIpc() {
     await writeSettings(settings)
 
     // 内存与磁盘一起清；放在退出落盘之前，避免旧内容被 before-quit 的 flush 写回来。
-    await Promise.allSettled([
+    // 每一路的结果都看：清理失败要如实报，不能假装「恢复出厂成功」。
+    const clearResults = await Promise.allSettled([
       memoryStore.clear(),
       chatHistoryStore.clear(),
       factStore.reset(),
       speechHabits.clear(),
       companionService.reset()
     ])
+    const clearFailed = clearResults
+      .filter((entry) => entry.status === 'rejected' || entry.value === false || entry.value?.ok === false)
+      .map((entry) => (entry.status === 'rejected' ? String(entry.reason?.message ?? entry.reason) : JSON.stringify(entry.value)))
+    if (clearFailed.length > 0) {
+      log('[factory] 部分记忆清理失败：', clearFailed.join('；'))
+    }
     await Promise.allSettled([
       memoryStore.flush(),
       chatHistoryStore.flush(),
@@ -4522,6 +5939,160 @@ function registerIpc() {
     describeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   void wakeVoice.init()
+
+  // ---- 语音输入：本地 faster-whisper 优先，云端兜底；麦克风窗口跟着开关走 ----
+  // 采集在隐藏窗口里做（renderer/mic.html），主进程只收成品 WAV 并判定唤醒词。
+  asr = createAsrBackend({
+    userData,
+    getSecret: async () => {
+      if (secretStore === null) return ''
+      try {
+        return (await secretStore.get('asr', 'apiKey')) ?? ''
+      } catch {
+        return ''
+      }
+    },
+    log,
+    describeError: (error) => (error instanceof Error ? error.message : String(error))
+  })
+
+  const wakeWordsForVoice = async () => {
+    const config = await asr.readConfig()
+    if (config.wakeWords.length > 0) return config.wakeWords
+    const configured = Array.isArray(settings?.voice?.voiceWakeWords)
+      ? settings.voice.voiceWakeWords.filter((item) => typeof item === 'string' && item.trim() !== '')
+      : []
+    return configured.length > 0 ? configured : BUILTIN_VOICE_WAKE_WORDS
+  }
+
+  const closeMicWindow = () => {
+    if (micWin !== null && !micWin.isDestroyed()) micWin.destroy()
+    micWin = null
+  }
+
+  const openMicWindow = async () => {
+    if (micWin !== null && !micWin.isDestroyed()) return
+    const window = new BrowserWindow({
+      show: false,
+      width: 320,
+      height: 240,
+      skipTaskbar: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.cjs'),
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    })
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.on('closed', () => {
+      if (micWin === window) micWin = null
+    })
+    micWin = window
+    await window.loadFile(path.join(__dirname, 'renderer', 'mic.html'))
+  }
+
+  const syncMicWindow = async () => {
+    const config = await asr.readConfig()
+    asrMicEnabled = config.enabled
+    if (config.enabled) await openMicWindow()
+    else closeMicWindow()
+    return config
+  }
+
+  registerChannel('pet:asr:status', async () => asr.status())
+  registerChannel('pet:asr:config', async () => ({ ok: true, config: await asr.readConfig() }))
+  registerChannel('pet:asr:save', async (_event, patch) => {
+    await asr.saveConfig(patch)
+    const config = await syncMicWindow()
+    return { ok: true, config }
+  })
+  registerChannel('pet:asr:mic', async (_event, action) => {
+    if (action === 'stop') {
+      closeMicWindow()
+      return { ok: true, running: false }
+    }
+    await syncMicWindow()
+    return { ok: true, running: asrMicEnabled }
+  })
+  registerChannel('pet:asr:transcribe', async (_event, payload) => {
+    const buffer = Buffer.isBuffer(payload) ? payload : Buffer.from(payload ?? [])
+    const result = await asr.transcribe(buffer)
+    if (!result.ok || result.text === '') return { ...result, wakeWord: null }
+    const wakeWord = asr.matchWakeWord(result.text, await wakeWordsForVoice())
+    if (wakeWord !== null) {
+      speakOut({ text: '嗯？人家在呢♪', scene: 'wakeWord', origin: 'reply' })
+      if (win !== null && !win.isDestroyed()) {
+        win.webContents.send('pet:asr:woke', {
+          text: result.text,
+          wakeWord,
+          backend: result.backend
+        })
+      }
+    }
+    return { ...result, wakeWord }
+  })
+
+  // 本机识别的一次性配置：查路径 / 装依赖与模型 / 起服务。
+  // 用户想手动跑脚本时也能从面板看到确切位置，不用猜。
+  const asrToolsDir = path.join(__dirname, 'tools', 'asr')
+  const asrModelDir = path.join(
+    typeof process.env.LOCALAPPDATA === 'string' && process.env.LOCALAPPDATA !== ''
+      ? process.env.LOCALAPPDATA
+      : app.getPath('userData'),
+    'cyrene-asr',
+    'models'
+  )
+  const runPowerShell = (script, args = [], options = {}) =>
+    new Promise((resolve) => {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args],
+        { cwd: path.dirname(script), windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 900000, ...options },
+        (error, stdout, stderr) => resolve({ error, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
+      )
+    })
+
+  registerChannel('pet:asr:local', async (_event, action) => {
+    const installScript = path.join(asrToolsDir, 'install.ps1')
+    const startScript = path.join(asrToolsDir, 'start.ps1')
+    if (action === 'install') {
+      if (!fsSync.existsSync(installScript)) return { ok: false, error: 'installer_missing', path: installScript }
+      const { error, stdout, stderr } = await runPowerShell(installScript, ['-Model', 'small'])
+      const log = (stdout + '\n' + stderr).trim().split(/\r?\n/).slice(-15).join('\n')
+      return {
+        ok: error === null,
+        error: error === null ? null : 'install_failed',
+        log,
+        modelDir: asrModelDir,
+        installer: installScript
+      }
+    }
+    if (action === 'start') {
+      if (!fsSync.existsSync(startScript)) return { ok: false, error: 'starter_missing', path: startScript }
+      const child = execFile(
+        'powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', startScript],
+        { cwd: asrToolsDir, windowsHide: true, detached: true }
+      )
+      child.unref()
+      return { ok: true, modelDir: asrModelDir, starter: startScript }
+    }
+    const venvPython = path.join(asrToolsDir, '.venv', 'Scripts', 'python.exe')
+    const modelSnapshots = path.join(asrModelDir, 'models--Systran--faster-whisper-small')
+    return {
+      ok: true,
+      modelDir: asrModelDir,
+      installer: installScript,
+      starter: startScript,
+      venvReady: fsSync.existsSync(venvPython),
+      modelReady: fsSync.existsSync(modelSnapshots)
+    }
+  })
+
+  // 启动时按配置复原一次。失败不拦启动：麦克风本来就是可选项。
+  void syncMicWindow().catch((error) => {
+    log('[asr] 启动同步失败：', error instanceof Error ? error.message : String(error))
+  })
 }
 
 /**
@@ -4571,7 +6142,7 @@ function openSettingsWindow(panel) {
 
   void settingsWin.loadFile(path.join(__dirname, 'renderer', 'settings.html'), {
     ...(target === undefined ? {} : { hash: target }),
-    query: { theme: settings.theme?.preset ?? 'SakuraPink' }
+    query: { theme: resolveThemePreset('petSettings') }
   })
 }
 
@@ -4618,8 +6189,574 @@ function openGameWindow() {
   gameWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   void gameWin.loadFile(path.join(__dirname, 'renderer', 'game.html'), {
-    query: { theme: settings.theme?.preset ?? 'SakuraPink' }
+    query: { theme: resolveThemePreset('petPanels') }
   })
+}
+
+/* ---------------- 弹幕层与陪看窗 ----------------
+   弹幕层是一块全屏透明窗，永远不吃鼠标；文字只从主进程推，渲染层不读文件。
+   陪看窗只允许停在 B 站域名里，站外链接既不新开窗也不在当前窗里走。 */
+
+const BILI_HOSTS = ['bilibili.com', 'b23.tv']
+
+/* 弹幕层是懒创建的：没弹幕就不存在，安静一阵就自己收掉。
+   观感（字号 / 不透明度 / 时长 / 轨道 / 静默）由插件设置页下发，这里只做兜底。 */
+const DANMAKU_STYLE_DEFAULT = { fontSize: 22, opacity: 0.95, seconds: 12, tracks: 7, idleMinutes: 5 }
+let danmakuStyle = { ...DANMAKU_STYLE_DEFAULT }
+let danmakuEnabled = true
+let danmakuIdleTimer = null
+
+/* 把插件下发的值收进安全区间，任何一项坏了都不影响弹幕继续走。 */
+function normalizeDanmakuStyle(raw) {
+  const source = raw !== null && typeof raw === 'object' ? raw : {}
+  const pick = (value, min, max, fallback) => {
+    const num = Number(value)
+    if (!Number.isFinite(num)) return fallback
+    return Math.min(max, Math.max(min, num))
+  }
+  return {
+    fontSize: Math.round(pick(source.fontSize, 14, 40, DANMAKU_STYLE_DEFAULT.fontSize)),
+    opacity: pick(source.opacity, 0.3, 1, DANMAKU_STYLE_DEFAULT.opacity),
+    seconds: Math.round(pick(source.seconds, 6, 30, DANMAKU_STYLE_DEFAULT.seconds)),
+    tracks: Math.round(pick(source.tracks, 3, 12, DANMAKU_STYLE_DEFAULT.tracks)),
+    idleMinutes: Math.round(pick(source.idleMinutes, 1, 60, DANMAKU_STYLE_DEFAULT.idleMinutes))
+  }
+}
+
+/* 参数变了就重载一次页面：弹幕层本身是空的，重载没有观感代价。 */
+function applyDanmakuStyle(raw) {
+  const next = normalizeDanmakuStyle(raw)
+  const changed = next.fontSize !== danmakuStyle.fontSize
+    || next.opacity !== danmakuStyle.opacity
+    || next.seconds !== danmakuStyle.seconds
+    || next.tracks !== danmakuStyle.tracks
+  danmakuStyle = next
+  if (changed && danmakuWin !== null && !danmakuWin.isDestroyed()) {
+    void danmakuWin.loadFile(path.join(__dirname, 'renderer', 'danmaku.html'), {
+      query: {
+        font: String(next.fontSize),
+        opacity: String(next.opacity),
+        seconds: String(next.seconds),
+        tracks: String(next.tracks)
+      }
+    })
+  }
+}
+
+function isBiliUrl(raw) {
+  try {
+    const host = new URL(String(raw)).hostname.toLowerCase()
+    return BILI_HOSTS.some((item) => host === item || host.endsWith(`.${item}`))
+  } catch {
+    return false
+  }
+}
+
+function openDanmakuWindow() {
+  if (danmakuWin !== null && !danmakuWin.isDestroyed()) return danmakuWin
+  const area = screen.getPrimaryDisplay().workArea
+  danmakuWin = new BrowserWindow({
+    x: area.x,
+    y: area.y,
+    width: area.width,
+    height: area.height,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+
+  // screen-saver 是 Electron 允许的最高常驻层级，全屏游戏上也压得住。
+  danmakuWin.setAlwaysOnTop(true, 'screen-saver')
+  // 永远穿透：弹幕飘过去的时候，底下该怎么点还怎么点。
+  danmakuWin.setIgnoreMouseEvents(true, { forward: true })
+
+  danmakuWin.once('ready-to-show', () => {
+    if (danmakuWin !== null && !danmakuWin.isDestroyed()) danmakuWin.showInactive()
+  })
+
+  danmakuWin.on('closed', () => {
+    danmakuWin = null
+  })
+
+  void danmakuWin.loadFile(path.join(__dirname, 'renderer', 'danmaku.html'), {
+    query: {
+      font: String(danmakuStyle.fontSize),
+      opacity: String(danmakuStyle.opacity),
+      seconds: String(danmakuStyle.seconds),
+      tracks: String(danmakuStyle.tracks)
+    }
+  })
+  return danmakuWin
+}
+
+function closeDanmakuWindow() {
+  if (danmakuIdleTimer !== null) {
+    clearTimeout(danmakuIdleTimer)
+    danmakuIdleTimer = null
+  }
+  if (danmakuWin !== null && !danmakuWin.isDestroyed()) danmakuWin.destroy()
+  danmakuWin = null
+}
+
+/* 弹幕层只在有话说的时候存在：连着几分钟没新弹幕就自己收起来，
+   下次再有弹幕时重建，不必常驻一层全屏合成。 */
+function scheduleDanmakuIdleClose() {
+  if (danmakuIdleTimer !== null) clearTimeout(danmakuIdleTimer)
+  danmakuIdleTimer = setTimeout(() => {
+    danmakuIdleTimer = null
+    closeDanmakuWindow()
+  }, Math.max(1, danmakuStyle.idleMinutes) * 60 * 1000)
+  if (typeof danmakuIdleTimer.unref === 'function') danmakuIdleTimer.unref()
+}
+
+function pushDanmaku(item) {
+  const text = typeof item?.text === 'string' ? item.text.slice(0, 200) : ''
+  if (text === '' || danmakuEnabled !== true) return
+  const target = openDanmakuWindow()
+  const payload = {
+    id: Number(item?.id) || 0,
+    text,
+    tone: item?.tone === 'user' ? 'user' : 'pet'
+  }
+  const send = () => {
+    if (danmakuWin === null || danmakuWin.isDestroyed()) return
+    danmakuWin.webContents.send('pet:danmaku:item', payload)
+  }
+  // 页面还没加载完就发，事件会丢掉；等 did-finish-load 再补一次。
+  if (target.webContents.isLoading()) target.webContents.once('did-finish-load', send)
+  else send()
+  scheduleDanmakuIdleClose()
+}
+
+function openBiliWindow(rawUrl) {
+  const target = isBiliUrl(rawUrl) ? String(rawUrl) : 'https://www.bilibili.com'
+
+  if (biliWin !== null && !biliWin.isDestroyed()) {
+    biliWin.show()
+    biliWin.focus()
+    void biliWin.loadURL(target)
+    return biliWin
+  }
+
+  biliWin = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 720,
+    minHeight: 480,
+    icon: appIconPath,
+    title: '哔哩哔哩',
+    backgroundColor: '#ffffff',
+    show: false,
+    webPreferences: {
+      // 独立分区：B 站登录态单独存，不和桌宠自己的会话混在一起。
+      partition: 'persist:cyrene-bili',
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webviewTag: false
+    }
+  })
+
+  biliWin.once('ready-to-show', () => {
+    if (biliWin !== null && !biliWin.isDestroyed()) biliWin.show()
+  })
+
+  biliWin.on('closed', () => {
+    biliWin = null
+  })
+
+  biliWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (isBiliUrl(url) && biliWin !== null && !biliWin.isDestroyed()) void biliWin.loadURL(url)
+    return { action: 'deny' }
+  })
+
+  biliWin.webContents.on('will-navigate', (event, url) => {
+    if (!isBiliUrl(url)) event.preventDefault()
+  })
+
+  void biliWin.loadURL(target)
+  return biliWin
+}
+
+// ---------- B 站浏览与邮件 ----------
+
+/** B 站 API 会话：陪看窗的独立分区，登录态只在这里。 */
+function biliSession() {
+  return session.fromPartition('persist:cyrene-bili')
+}
+
+/** 读 B 站登录 Cookie，拼成 header 值。没有登录态就返回空串，只读接口照常用。 */
+async function biliCookieHeader() {
+  try {
+    const cookies = await biliSession().cookies.get({ url: 'https://www.bilibili.com' })
+    return cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+  } catch (error) {
+    log('[bili] 读 Cookie 失败：', error?.message ?? error)
+    return ''
+  }
+}
+
+/** 只读：B 站登录态。有 SESSDATA 就算登录，不把 cookie 明文吐出去。 */
+async function biliLoginStatus() {
+  const cookie = await biliCookieHeader()
+  const loggedIn = /(?:^|;\s*)SESSDATA=/.test(cookie)
+  return { loggedIn }
+}
+
+const BILI_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+
+// WBI 密钥缓存：img_key / sub_key 从 nav 接口拿，B 站会定期轮换。
+let wbiKeyCache = { imgKey: '', subKey: '', at: 0 }
+const WBI_KEY_TTL_MS = 12 * 60 * 60 * 1000
+
+/** 拿 WBI 密钥对（img_key + sub_key），带 12 小时缓存，失败回退旧值。 */
+async function biliWbiKeys() {
+  const now = Date.now()
+  if (wbiKeyCache.imgKey && now - wbiKeyCache.at < WBI_KEY_TTL_MS) {
+    return { imgKey: wbiKeyCache.imgKey, subKey: wbiKeyCache.subKey }
+  }
+  try {
+    const response = await net.fetch('https://api.bilibili.com/x/web-interface/nav', {
+      headers: { 'User-Agent': BILI_UA, Referer: 'https://www.bilibili.com/' }
+    })
+    if (response.ok) {
+      const json = await response.json()
+      const imgUrl = String(json?.data?.wbi_img?.img_url ?? '')
+      const subUrl = String(json?.data?.wbi_img?.sub_url ?? '')
+      const imgKey = imgUrl.split('/').pop()?.split('.')[0] ?? ''
+      const subKey = subUrl.split('/').pop()?.split('.')[0] ?? ''
+      if (imgKey && subKey) {
+        wbiKeyCache = { imgKey, subKey, at: now }
+        return { imgKey, subKey }
+      }
+    }
+  } catch (error) {
+    log('[bili] 获取 WBI 密钥失败：', error?.message ?? error)
+  }
+  return { imgKey: wbiKeyCache.imgKey, subKey: wbiKeyCache.subKey }
+}
+
+/** 给只读接口 URL 补 WBI 签名；拿不到 key 时原样返回。 */
+async function biliSignedUrl(url) {
+  const { imgKey, subKey } = await biliWbiKeys()
+  if (!imgKey || !subKey) return url
+  return signWbiUrl(url, imgKey, subKey)
+}
+
+/** B 站 API 统一出口：带登录态、UA、Referer，走 net.fetch。 */
+async function biliFetch(url, init = {}) {
+  const cookie = await biliCookieHeader()
+  const headers = {
+    'User-Agent': BILI_UA,
+    Referer: 'https://www.bilibili.com/',
+    ...(init.headers ?? {}),
+    ...(cookie ? { Cookie: cookie } : {})
+  }
+  const response = await net.fetch(url, { ...init, headers })
+  if (!response.ok) throw new Error(`B 站请求失败：HTTP ${response.status}`)
+  return response.json()
+}
+
+/** 只读：搜索视频。 */
+async function biliSearch(keyword) {
+  return parseSearch(await biliFetch(await biliSignedUrl(searchUrl(keyword))))
+}
+
+/** 只读：视频详情（含分 P 列表）。 */
+async function biliVideoInfo(bvid) {
+  return parseVideoInfo(await biliFetch(await biliSignedUrl(videoInfoUrl(bvid))))
+}
+
+/** 只读：拿视频的字幕轨列表（需要登录态才有 AI 字幕）。 */
+async function biliSubtitleList(bvid, cid) {
+  const url = await biliSignedUrl(playerUrl(bvid, cid))
+  return parseSubtitleList(await biliFetch(url))
+}
+
+/** 只读：下载某条字幕并拼成全文。subtitleUrl 来自 biliSubtitleList。 */
+async function biliTranscript(subtitleUrl) {
+  const response = await net.fetch(subtitleUrl, { headers: { 'User-Agent': BILI_UA } })
+  if (!response.ok) throw new Error(`字幕下载失败：HTTP ${response.status}`)
+  return parseTranscript(await response.json())
+}
+
+/** 只读：抓网页正文。 */
+async function biliArticle(url) {
+  const response = await net.fetch(url, { headers: { 'User-Agent': BILI_UA } })
+  if (!response.ok) throw new Error(`抓取失败：HTTP ${response.status}`)
+  return extractArticle(await response.text())
+}
+
+/** B 站写操作策略：默认全关，逐项在设置里开启。 */
+function biliPolicy() {
+  const browse = settings?.browse ?? {}
+  return {
+    enabledWrites: Array.isArray(browse.enabledWrites) ? browse.enabledWrites : [],
+    maxCoinsPerAction: Number.isInteger(browse.maxCoinsPerAction)
+      ? browse.maxCoinsPerAction
+      : 1
+  }
+}
+
+/** 写操作是否需要二次确认（不可撤回 / 消耗资产 / 公开，任一条命中）。 */
+function biliNeedsConfirm(action) {
+  try {
+    return needsConfirmation(action)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 二次确认的一次性令牌。
+ *
+ * 危险写操作弹确认框时由主进程发一个 nonce，确认后的调用必须原样带回；
+ * nonce 绑定动作与参数、单次有效、两分钟过期。任何页面光传 confirmed: true
+ * 都过不去——没有见过确认框就拿不到令牌。
+ */
+const BILI_CONFIRM_TTL_MS = 2 * 60 * 1000
+const biliConfirmNonces = new Map()
+
+function issueBiliConfirmNonce(action, params) {
+  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  biliConfirmNonces.set(nonce, {
+    action,
+    params: JSON.stringify(params ?? {}),
+    expiresAt: Date.now() + BILI_CONFIRM_TTL_MS
+  })
+  return nonce
+}
+
+function consumeBiliConfirmNonce(nonce, action, params) {
+  if (typeof nonce !== 'string' || nonce === '') return false
+  const record = biliConfirmNonces.get(nonce)
+  if (record === undefined) return false
+  biliConfirmNonces.delete(nonce)
+  if (Date.now() > record.expiresAt) return false
+  if (record.action !== action) return false
+  if (record.params !== JSON.stringify(params ?? {})) return false
+  return true
+}
+
+/** B 站写操作：策略校验 → 拼表单 → 发请求 → 读响应。
+ *  enforceNonce=true 时（能力中心 IPC 入口）确认必须带一次性令牌；
+ *  模型工具路径的确认经过聊天窗交互，走 trusted 分支，不要求令牌。 */
+async function biliWrite(action, params, confirmed, nonce = null, enforceNonce = false) {
+  const policy = biliPolicy()
+  assertActionAllowed(action, policy)
+  if (action === 'coin') assertCoinCount(params?.coinCount ?? 1, policy)
+
+  // 危险动作必须带 confirmed，且 confirmed 必须对得上主进程发的一次性令牌；
+  // 二次确认的弹框留在 UI 层，令牌由主进程在返回 needsConfirm 时签发。
+  if (biliNeedsConfirm(action)) {
+    if (confirmed !== true) {
+      const token = issueBiliConfirmNonce(action, params)
+      return { ok: false, needsConfirm: true, confirmNonce: token, message: '这个动作需要再确认一次' }
+    }
+    if (enforceNonce && !consumeBiliConfirmNonce(nonce, action, params)) {
+      return { ok: false, message: '确认令牌无效或已过期，请重新确认' }
+    }
+  }
+
+  const request = buildActionRequest(action, params)
+  const cookie = await biliCookieHeader()
+  const csrf = biliCsrfFrom(cookie)
+  if (request.requiresCsrf && !csrf) {
+    return { ok: false, message: 'B 站还没登录，写操作做不了' }
+  }
+
+  const form = request.requiresCsrf && csrf ? { ...request.form, csrf } : request.form
+  const body = new URLSearchParams(form)
+  const response = await biliFetch(request.url, {
+    method: request.method,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...(csrf ? { 'X-CSRF-Token': csrf } : {})
+    },
+    body: body.toString()
+  })
+  return parseActionResponse(response)
+}
+
+/** 从 Cookie 串里取 bili_jct（csrf）。 */
+function biliCsrfFrom(cookie) {
+  const m = /(?:^|;\s*)bili_jct=([^;]+)/.exec(cookie)
+  return m?.[1] ?? ''
+}
+
+// ---------- 邮件 ----------
+
+/** 把 UTF-8 发件人/主题按 RFC2047 编码，避免中文乱码。 */
+function mimeHeader(text) {
+  const value = String(text ?? '')
+  if (value === '') return ''
+  // 头部注入防线：任何换行都说明输入有问题，直接整体拒绝，
+  // 绝不让主题或发件人名字拼出额外的邮件头（Bcc 等）。
+  if (/[\r\n]/.test(value)) {
+    throw new Error('邮件主题或发件人名称含非法换行')
+  }
+  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`
+}
+
+/** 最小 SMTP 客户端：465 走 TLS 直连，587 走 STARTTLS，AUTH LOGIN 认证。 */
+function smtpSend({ host, port, user, pass, fromName, to, subject, body }) {
+  return new Promise((resolve, reject) => {
+    const portNum = Number(port)
+    const directTls = portNum === 465
+    let socket
+    let buffer = ''
+    let stage = directTls ? 'ehlo' : 'greet'
+    let settled = false
+
+    const finish = (err) => {
+      if (settled) return
+      settled = true
+      if (socket) {
+        try { socket.destroy() } catch { /* noop */ }
+      }
+      if (err) reject(err)
+      else resolve(true)
+    }
+
+    const send = (line) => socket.write(line + '\r\n')
+
+    function handle(line) {
+      const code = Number.parseInt(line.slice(0, 3), 10)
+      if (line[3] === '-') return
+      if (code >= 500 && stage !== 'done') {
+        return finish(new Error(`SMTP 拒绝：${line.slice(4) || line}`))
+      }
+
+      if (stage === 'greet') {
+        send('EHLO localhost')
+        stage = 'ehlo'
+      } else if (stage === 'ehlo') {
+        if (!directTls && line.includes('STARTTLS')) {
+          send('STARTTLS')
+          stage = 'starttls'
+        } else {
+          send('AUTH LOGIN')
+          stage = 'auth-user'
+        }
+      } else if (stage === 'starttls') {
+        if (code !== 220) return finish(new Error('SMTP 不支持 STARTTLS'))
+        const raw = socket
+        raw.removeAllListeners('data')
+        buffer = ''
+        // 证书校验保持 Node 默认开启：AUTH LOGIN 的凭据就在这条链路上，
+        // 关掉校验等于把用户名密码交给任何能中间人劫持 587 端口的人。
+        const secure = tls.connect({ socket: raw })
+        socket = secure
+        secure.on('data', onData)
+        secure.on('error', (e) => finish(e))
+        secure.on('secureConnect', () => {
+          send('EHLO localhost')
+          stage = 'tls-ehlo'
+        })
+      } else if (stage === 'tls-ehlo') {
+        send('AUTH LOGIN')
+        stage = 'auth-user'
+      } else if (stage === 'auth-user') {
+        send(Buffer.from(user, 'utf8').toString('base64'))
+        stage = 'auth-pass'
+      } else if (stage === 'auth-pass') {
+        send(Buffer.from(pass, 'utf8').toString('base64'))
+        stage = 'mail-from'
+      } else if (stage === 'mail-from') {
+        send(`MAIL FROM:<${user}>`)
+        stage = 'rcpt'
+      } else if (stage === 'rcpt') {
+        send(`RCPT TO:<${to}>`)
+        stage = 'data'
+      } else if (stage === 'data') {
+        send('DATA')
+        stage = 'data-body'
+      } else if (stage === 'data-body') {
+        if (code !== 354) return finish(new Error('SMTP 拒绝接收正文'))
+        const headers = [
+          `From: ${mimeHeader(fromName)} <${user}>`,
+          `To: <${to}>`,
+          `Subject: ${mimeHeader(subject)}`,
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=UTF-8',
+          'Content-Transfer-Encoding: base64'
+        ].join('\r\n')
+        const b64 = Buffer.from(String(body ?? ''), 'utf8').toString('base64').replace(/(.{1,76})/g, '$1\r\n')
+        send(headers + '\r\n\r\n' + b64)
+        send('.')
+        stage = 'done'
+      } else if (stage === 'done') {
+        if (code !== 250) return finish(new Error(`SMTP 发送被拒：${line.slice(4) || line}`))
+        send('QUIT')
+        finish(null)
+      }
+    }
+
+    function onData(chunk) {
+      buffer += chunk.toString('utf8')
+      let idx
+      while ((idx = buffer.indexOf('\r\n')) >= 0) {
+        const line = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        if (line.trim() !== '') handle(line)
+      }
+    }
+
+    const connectOpts = { host, port: portNum }
+    socket = directTls ? tls.connect(connectOpts) : tcpConnect(connectOpts)
+    socket.on('data', onData)
+    socket.on('error', (e) => finish(e))
+    socket.setTimeout(30000, () => finish(new Error('SMTP 连接超时')))
+  })
+}
+
+/** 真发信：走桌宠自带 SMTP，独立于 Cyrene 本体，不再依赖 send_mail.ps1。 */
+async function sendMail({ to, subject, body }) {
+  const recipient = String(to ?? settings?.mail?.defaultRecipient ?? '').trim()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+    return { ok: false, reason: 'bad-recipient', message: '收件人邮箱格式不对' }
+  }
+  const smtp = settings?.mail?.smtp ?? {}
+  const host = String(smtp.host ?? '').trim()
+  const port = Number(smtp.port ?? 465)
+  const user = String(smtp.user ?? '').trim()
+  // 密码优先读加密仓库；设置里那份是迁移前的明文兜底。
+  let pass = ''
+  if (secretStore !== null) {
+    try {
+      pass = (await secretStore.get('mail', 'smtp.pass')) ?? ''
+    } catch (error) {
+      log('[mail] 读加密密码失败，退回设置明文', String(error?.message ?? error))
+    }
+  }
+  if (pass === '') pass = String(smtp.pass ?? '')
+  if (host === '' || user === '') {
+    return { ok: false, reason: 'smtp-not-configured', message: '还没配置 SMTP（发件邮箱），请先在能力中心填好' }
+  }
+  const fromName = String(settings?.mail?.fromName ?? '').trim() || '昔涟'
+
+  try {
+    await smtpSend({ host, port, user, pass, fromName, to: recipient, subject: subject ?? '', body })
+    return { ok: true, message: `已发送到 ${recipient}` }
+  } catch (error) {
+    return { ok: false, message: error?.message ?? String(error) }
+  }
 }
 
 /** 已入库表情的扩展名 → MIME；腾讯富媒体只按图片类型处理。 */
@@ -4746,7 +6883,113 @@ function openStickerWindow() {
   stickerWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   void stickerWin.loadFile(path.join(__dirname, 'renderer', 'stickers.html'), {
-    query: { theme: settings.theme?.preset ?? 'SakuraPink' }
+    query: { theme: resolveThemePreset('petPanels') }
+  })
+}
+
+/**
+ * 某个位置该用哪套配色：勾了跟随就用 theme.preset，
+ * 取消勾选就用它自己固定下来的那套。缺省一律跟随。
+ */
+function resolveThemePreset(slot) {
+  const preset = settings.theme?.preset ?? 'SakuraPink'
+  const entry = settings.theme?.slots?.[slot]
+  if (entry && entry.follow === false) {
+    if (typeof entry.preset === 'string' && entry.preset !== '') return entry.preset
+  }
+  return preset
+}
+
+/**
+ * 背景库：网格浏览 userData/backgrounds，选用与删除都走已登记通道。
+ * 这一页只做展示与选择，图片本体仍由主进程搬。
+ */
+function openBackgroundsWindow() {
+  if (backgroundsWin !== null && !backgroundsWin.isDestroyed()) {
+    backgroundsWin.show()
+    backgroundsWin.focus()
+    return
+  }
+
+  backgroundsWin = new BrowserWindow({
+    width: 880,
+    height: 720,
+    icon: appIconPath,
+    minWidth: 680,
+    minHeight: 540,
+    resizable: true,
+    frame: false,
+    backgroundColor: '#fffafc',
+    show: false,
+    skipTaskbar: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+
+  backgroundsWin.once('ready-to-show', () => {
+    if (backgroundsWin !== null && !backgroundsWin.isDestroyed()) backgroundsWin.show()
+  })
+
+  backgroundsWin.on('closed', () => {
+    backgroundsWin = null
+  })
+
+  backgroundsWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+
+  void backgroundsWin.loadFile(path.join(__dirname, 'renderer', 'backgrounds.html'), {
+    query: { theme: resolveThemePreset('petPanels') }
+  })
+}
+
+/**
+ * 会话页：聊天历史与 QQ 会话两个页签。
+ * 聊天历史走 pet:chat:history，QQ 只读主人相关会话的最近消息。
+ */
+function openSessionsWindow(tab) {
+  if (sessionsWin !== null && !sessionsWin.isDestroyed()) {
+    sessionsWin.show()
+    sessionsWin.focus()
+    return
+  }
+
+  sessionsWin = new BrowserWindow({
+    width: 900,
+    height: 740,
+    icon: appIconPath,
+    minWidth: 700,
+    minHeight: 560,
+    resizable: true,
+    frame: false,
+    backgroundColor: '#fffafc',
+    show: false,
+    skipTaskbar: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+
+  sessionsWin.once('ready-to-show', () => {
+    if (sessionsWin !== null && !sessionsWin.isDestroyed()) sessionsWin.show()
+  })
+
+  sessionsWin.on('closed', () => {
+    sessionsWin = null
+  })
+
+  sessionsWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+
+  void sessionsWin.loadFile(path.join(__dirname, 'renderer', 'sessions.html'), {
+    query:
+      typeof tab === 'string' && tab !== ''
+        ? { theme: settings.theme?.preset ?? 'SakuraPink', tab }
+        : { theme: settings.theme?.preset ?? 'SakuraPink' }
   })
 }
 
@@ -4793,7 +7036,7 @@ function openAbilityWindow() {
   abilityWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   void abilityWin.loadFile(path.join(__dirname, 'renderer', 'ability.html'), {
-    query: { theme: settings.theme?.preset ?? 'SakuraPink' }
+    query: { theme: resolveThemePreset('petPanels') }
   })
 }
 
@@ -4848,6 +7091,24 @@ function openInsightWindow(tab) {
         : { theme: settings.theme?.preset ?? 'SakuraPink' }
   })
 }
+
+/* 记忆页作用域列表：读插件进程写出的 memory-snapshot.json，观察台只读不写。 */
+registerChannel('pet:memory-console:load', async () => {
+  const file = path.join(app.getPath('home'), '.cyrene-pet', 'memory-snapshot.json')
+  try {
+    const text = await fs.readFile(file, 'utf8')
+    const data = JSON.parse(text)
+    // 外部文件内容放进 data 字段，不展开到返回值：文件里的 ok/其他字段
+    // 不允许覆盖主进程给出的状态。
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      return { ok: false, reason: 'bad-snapshot', file }
+    }
+    return { ok: true, data }
+  } catch (error) {
+    const code = error?.code === 'ENOENT' ? 'not-ready' : 'read-failed'
+    return { ok: false, reason: code, file }
+  }
+})
 
 /**
  * 聊天窗：单例，和设置窗同一套 preload。
@@ -4908,7 +7169,7 @@ function openChatWindow() {
   chatWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   void chatWin.loadFile(path.join(__dirname, 'renderer', 'chat.html'), {
-    query: { theme: settings.theme?.preset ?? 'SakuraPink' }
+    query: { theme: resolveThemePreset('petPanels') }
   })
 }
 
@@ -4951,7 +7212,7 @@ function openOnboardingWindow() {
   onboardingWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   void onboardingWin.loadFile(path.join(__dirname, 'renderer', 'onboarding.html'), {
-    query: { theme: settings.theme?.preset ?? 'SakuraPink' }
+    query: { theme: resolveThemePreset('petPanels') }
   })
 }
 
@@ -5329,7 +7590,8 @@ function createTray() {
 function recoverWindow() {
   if (win === null || win.isDestroyed()) return
   const [width, height] = win.getSize()
-  win.setBounds(dockBoundsToBottomRight({ width, height }))
+  // 与 dockPetToBottomRight / pet:window:move 同一口径：workArea 由调用方注入。
+  win.setBounds(dockBoundsToBottomRight({ width, height }, screen.getPrimaryDisplay().workArea))
   win.show()
   win.focus()
   void saveWindowState()
@@ -5467,8 +7729,12 @@ async function createWindow() {
     reviveRenderer(details.reason)
   })
   win.webContents.on('did-finish-load', async () => {
-    // 页面正常起来后允许下一次真失败重新走兜底页，不要把开关永久关上。
-    fallbackShown = false
+    // 只有主页面真正加载成功才关掉兜底开关；兜底页自身的 did-finish-load 不算恢复，
+    // 否则「兜底页加载成功 → 开关重置 → 再失败 → 再切兜底」会无限循环。
+    const currentUrl = win?.webContents?.getURL?.() ?? ''
+    if (!currentUrl.includes('fallback.html')) {
+      fallbackShown = false
+    }
     // 密钥重建/隔离只提醒一次：reload 不该重复打扰。
     if (vaultStartupNotice !== null && !vaultNoticeDelivered) {
       vaultNoticeDelivered = true
@@ -5589,7 +7855,151 @@ async function maybeAskScreenConsent() {
   }
 }
 
+/* ---------------- 游戏模式（由 DSH 插件驱动） ----------------
+   插件把 live.json 的 game 段写成 { active, hideBubble, dimPet, openRequest }。
+   这里只做两件窗口侧的事：整窗不透明度、按请求打开游戏页；
+   气泡收不收由渲染层看同一份 live 自己决定，主进程不重复管。 */
+const pluginLivePath = () => path.join(userData, 'live.json')
+let gameModeTimer = null
+let appliedGameOpacity = 1
+let appliedOpenRequest = 0
+
+async function readPluginLive() {
+  try {
+    const raw = await fs.readFile(pluginLivePath(), 'utf8')
+    const live = JSON.parse(raw)
+    return live !== null && typeof live === 'object' ? live : null
+  } catch {
+    // 插件没在跑、文件还没写出来，都算「没有插件状态」
+    return null
+  }
+}
+
+function applyGameVisual(game) {
+  if (win === null || win.isDestroyed()) return
+  const active = game !== null && game.active === true
+  const raw = active && Number.isFinite(Number(game?.dimPet)) ? Number(game.dimPet) : 1
+  // dimPet 的语义就是「压到多暗」：0 = 完全隐藏，允许到 0，不再抬到 0.2。
+  const next = Math.min(1, Math.max(0, raw))
+  if (Math.abs(next - appliedGameOpacity) < 0.01) return
+  appliedGameOpacity = next
+  try {
+    win.setOpacity(next)
+  } catch (error) {
+    log('[game] 窗口不透明度设置失败：', error instanceof Error ? error.message : String(error))
+  }
+}
+
+let appliedDanmakuId = 0
+let appliedWatchOpen = 0
+let watchOpen = false
+
+async function syncGameMode() {
+  const live = await readPluginLive()
+  const game = live?.game ?? null
+  applyGameVisual(game)
+
+  /* 弹幕开关与观感：每轮读一次；设置页改完，下一次推送就按新值走。 */
+  danmakuEnabled = live?.danmaku?.enabled !== false
+  applyDanmakuStyle(live?.watch?.style)
+
+  const requested = Number(game?.openRequest) || 0
+  if (requested > appliedOpenRequest) {
+    appliedOpenRequest = requested
+    log('[game] 插件请求打开游戏页')
+    openGameWindow()
+  }
+
+  // 陪看：先按请求开窗，再按 active 收窗。插件重启后 openRequest 归零，也不会误开。
+  const watch = live?.watch ?? null
+  const ask = Number(watch?.openRequest) || 0
+  if (ask > appliedWatchOpen) {
+    appliedWatchOpen = ask
+    watchOpen = true
+    log('[watch] 插件请求打开陪看窗：', String(watch?.url ?? ''))
+    openBiliWindow(watch?.url)
+  } else if (watchOpen === true && (watch === null || watch?.active !== true)) {
+    // 只有「插件明确说不再陪看」才收窗；openRequest 归零只是插件重启，
+    // 不该顺手把用户正在看的窗口关掉。
+    watchOpen = false
+    if (biliWin !== null && !biliWin.isDestroyed()) biliWin.close()
+  }
+
+  // 弹幕：只推比上次新的那几条；没有新的就不动窗口。
+  const items = Array.isArray(live?.danmaku?.items) ? live.danmaku.items : []
+  const newest = items.reduce((max, item) => Math.max(max, Number(item?.id) || 0), 0)
+  // 插件重启后 seq 从 1 重新数；比上次小就说明换了一轮，重新跟上。
+  if (newest > 0 && newest < appliedDanmakuId) appliedDanmakuId = 0
+  const fresh = items.filter((item) => (Number(item?.id) || 0) > appliedDanmakuId)
+  if (fresh.length === 0) return
+  fresh.sort((a, b) => (Number(a?.id) || 0) - (Number(b?.id) || 0))
+  for (const item of fresh) pushDanmaku(item)
+  appliedDanmakuId = Number(fresh[fresh.length - 1]?.id) || appliedDanmakuId
+}
+
+function startGameModeSync() {
+  if (gameModeTimer !== null) return
+  // 3 秒一次只读一个本地 JSON，开销可以忽略；插件不在时读失败就静默跳过。
+  gameModeTimer = setInterval(() => {
+    void syncGameMode()
+  }, 3000)
+  gameModeTimer.unref?.()
+  void syncGameMode()
+}
+
+/* 桌宠由 DSH 以 detached 方式拉起，DSH 被强杀时没人收尸，任务栏里会留下一个独立图标。
+   带上 --parent-pid 之后自己盯着父进程，它消失就跟着退出。 */
+function watchParentProcess() {
+  const arg = process.argv.find((item) => item.startsWith('--parent-pid='))
+  if (arg === undefined) return
+  const parentPid = Number(arg.slice('--parent-pid='.length))
+  if (!Number.isInteger(parentPid) || parentPid <= 0) return
+
+  // Windows 上 PID 会被复用：kill(pid, 0) 成功不等于父进程还活着。
+  // 启动时记一次父进程的创建时间，每 30 秒复核一次；对不上就说明原进程已退出、
+  // 这个 PID 是别人——按「父进程消失」处理，跟着退出。
+  let parentStartedAt = null
+  const captureParentStart = () => {
+    execFile(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        `(Get-Process -Id ${parentPid} -ErrorAction SilentlyContinue).StartTime.ToFileTimeUtc()`
+      ],
+      { timeout: 3000, windowsHide: true },
+      (_error, stdout) => {
+        const value = Number(String(stdout ?? '').trim())
+        parentStartedAt = Number.isFinite(value) && value > 0 ? value : null
+      }
+    )
+  }
+  captureParentStart()
+  let tickCount = 0
+  const timer = setInterval(() => {
+    tickCount += 1
+    let alive = true
+    try {
+      process.kill(parentPid, 0)
+    } catch (error) {
+      /* EPERM 说明进程还在，只是没权限发信号。 */
+      alive = error?.code === 'EPERM'
+    }
+    if (alive && parentStartedAt !== null && tickCount % 15 === 0) {
+      const before = parentStartedAt
+      captureParentStart()
+      alive = parentStartedAt !== null && parentStartedAt === before
+    }
+    if (!alive) {
+      clearInterval(timer)
+      app.quit()
+    }
+  }, 2000)
+  timer.unref?.()
+}
+
 app.whenReady().then(async () => {
+  watchParentProcess()
   // 第二个实例只负责把第一只叫出来，自己不装配任何东西。
   if (!singleInstanceLock) return
 
@@ -5599,7 +8009,8 @@ app.whenReady().then(async () => {
   const isPermissionAllowed = (permission) => {
     if (allowedPermissions.has(permission)) return true
     // 只放 media（含麦克风）；摄像头、通知等仍一律拒绝。
-    return permission === 'media' && wakeVoice?.isEnabled() === true
+    // 两条语音链路任一开着就放行：专用唤醒引擎，或 ASR 唤醒词。
+    return permission === 'media' && (wakeVoice?.isEnabled() === true || asrMicEnabled === true)
   }
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     const allowed = isPermissionAllowed(permission)
@@ -5610,8 +8021,8 @@ app.whenReady().then(async () => {
     isPermissionAllowed(permission)
   )
   session.defaultSession.setDevicePermissionHandler((details) => {
-    // 只有唤醒开着时才允许音频输入设备；其余设备类型保持拒绝。
-    return wakeVoice?.isEnabled() === true && details.deviceType === 'audioinput'
+    // 只有语音链路开着时才允许音频输入设备；其余设备类型保持拒绝。
+    return (wakeVoice?.isEnabled() === true || asrMicEnabled === true) && details.deviceType === 'audioinput'
   })
 
   // 锁屏、休眠期间不主动搭话；唤醒后把计时起点推到现在，避免攒着一条立刻补发。
@@ -5685,6 +8096,12 @@ app.whenReady().then(async () => {
   registerIpc()
   syncBalanceMonitor()
   await createWindow()
+  /* 设置已在手，再对一次 DSH 那份；之后每 5 秒看一次 stamp。 */
+  startSettingsSync()
+  // 游戏模式跟着插件走：窗口在位后才开始读 live.json。
+  startGameModeSync()
+  // DSH 回复念出：窗口在位了再启动，第一条回复就有地方显示。
+  syncDshSpeech()
   // 识屏单独问一次；不挡启动，窗口起来之后再问。
   void maybeAskScreenConsent()
   createTray()
@@ -5695,6 +8112,8 @@ app.whenReady().then(async () => {
   startPresenceTimer()
   // 收场单独一条时间线：它要跑在桌宠隐藏、专注模式中也照常检查。
   startClosingTimer()
+  // 主人位置 IP 定位：尽力而为，不挡启动；已填过或关了自动定位就不动。
+  void locateOwnerByIpOnce()
   if (settings.onboarded !== true) openOnboardingWindow()
   log('ready')
 }).catch((error) => {
@@ -5706,6 +8125,31 @@ app.whenReady().then(async () => {
   )
   app.exit(1)
 })
+
+/** 主人位置 IP 定位：尽力而为，只做一次，失败静默，绝不阻塞启动。 */
+async function locateOwnerByIpOnce() {
+  try {
+    const presence = settings?.presence ?? {}
+    // 用户已手动填过主人位置，或明确关了自动定位，就不动。
+    if (presence.ownerAutoLocate === false) return
+    if (typeof presence.ownerCity === 'string' && presence.ownerCity.trim() !== '') return
+    const { locateOwnerByIp } = await import('./ip-locate.mjs')
+    const located = await locateOwnerByIp({ fetchImpl: globalThis.fetch })
+    if (located.ok !== true) {
+      log('[owner] IP 定位未取得结果', located?.reason ?? 'unknown')
+      return
+    }
+    const ownerCity = located.city || located.region || ''
+    if (ownerCity === '') return
+    settings = mergeLayer(settings, {
+      presence: { ownerCity, ownerIp: located.ip ?? '', ownerAutoLocate: true }
+    })
+    await writeSettings(settings)
+    log('[owner] 主人位置已定位', ownerCity)
+  } catch (error) {
+    log('[owner] 主人位置定位失败', error?.message ?? String(error))
+  }
+}
 
 app.on('window-all-closed', () => {
   // 桌宠是常驻托盘应用：主窗口关闭只是 hide，窗口全销毁也不等于用户想退出。
@@ -5734,6 +8178,8 @@ app.on('before-quit', (event) => {
   if (memoryFlushed) return
   memoryFlushed = true
   event.preventDefault()
+  // 防抖窗口里的作息同步落盘，不等 5 秒定时器。
+  flushRhythmNow()
   // 落盘最多等 3 秒：加密仓库卡住时也得让用户关得掉，不能只留任务管理器。
   const flushed = Promise.allSettled([
     memoryStore.flush(),
@@ -5751,10 +8197,23 @@ app.on('before-quit', (event) => {
   Promise.race([flushed, timeout]).finally(() => app.quit())
 })
 
+/**
+ * 未捕获异常：主进程继续跑下去，只会带着半损坏的状态接受 IPC、写设置、跑定时器，
+ * 用户看到的是「某些功能莫名其妙不工作」。宁可干净退出让外壳重开，
+ * 也不留一个假活的进程。启动链还没完成（没有窗口）时尤其要立刻退出。
+ */
 process.on('uncaughtException', (error) => {
-  log('uncaughtException', error)
+  log('uncaughtException，进程退出以避免半损坏状态继续运行', error)
+  try {
+    dialog.showErrorBox('桌宠遇到错误', `发生未处理的错误，桌宠将退出。\n\n${error?.message ?? String(error)}`)
+  } catch {
+    /* 弹不出框也照样退出。 */
+  }
+  app.exit(1)
 })
 
 process.on('unhandledRejection', (reason) => {
+  // rejection 多数发生在可恢复的异步支线（网络、落盘），只记日志不退出；
+  // 若它发生在启动链，外层 catch 会各自兜住。
   log('unhandledRejection', reason)
 })

@@ -42,9 +42,22 @@ function readCareSettings(getSettings) {
 function readGuardConfig(getSettings) {
   const raw = readCareSettings(getSettings).requestGuard
   const value = raw !== null && typeof raw === 'object' ? raw : {}
-  const perMinute = Number.isFinite(Number(value.perMinute))
-    ? Math.min(MAX_PER_MINUTE, Math.max(MIN_PER_MINUTE, Math.floor(Number(value.perMinute))))
-    : DEFAULT_PER_MINUTE
+  /*
+   * 只认真数字：null / '' / undefined / 布尔都不算，
+   * 避免 Number(null)=0 被夹成 1，把默认每分钟 20 次限成 1 次。
+   * 0 也按默认值——想停发请关 enabled，而不是把上限写成 0。
+   */
+  const rawValue = value.perMinute
+  const asNumber =
+    typeof rawValue === 'number'
+      ? rawValue
+      : typeof rawValue === 'string' && rawValue.trim() !== ''
+        ? Number(rawValue)
+        : NaN
+  const perMinute =
+    Number.isFinite(asNumber) && asNumber > 0
+      ? Math.min(MAX_PER_MINUTE, Math.max(MIN_PER_MINUTE, Math.floor(asNumber)))
+      : DEFAULT_PER_MINUTE
   return {
     enabled: value.enabled !== false,
     perMinute
@@ -65,9 +78,12 @@ class EmotionPresetPool {
   }
 
   pick(emotion) {
-    const lines = OFFLINE_LINES[emotion] ?? OFFLINE_LINES.neutral
-    const cursor = this.cursors.get(emotion) ?? 0
-    this.cursors.set(emotion, cursor + 1)
+    // 未知情绪落回 neutral 时，游标也要记在 neutral 名下：
+    // 记在未知 key 下会让 neutral 游标不推进，连续未知情绪永远取第一句。
+    const key = Object.prototype.hasOwnProperty.call(OFFLINE_LINES, emotion) ? emotion : 'neutral'
+    const lines = OFFLINE_LINES[key]
+    const cursor = this.cursors.get(key) ?? 0
+    this.cursors.set(key, cursor + 1)
 
     const index = cursor % lines.length
     return { text: lines[index], poolId: this.poolId, index }
@@ -130,7 +146,9 @@ export function createRequestGate(options = {}) {
       return {
         enabled: config.enabled,
         perMinute: config.perMinute,
-        tokens: snapshot === null ? config.perMinute : snapshot.tokens
+        // 桶还没创建过时如实报 0，不把 tokens 装成满桶；initialized 让调用方区分「未开张」。
+        initialized: snapshot !== null,
+        tokens: snapshot === null ? 0 : snapshot.tokens
       }
     } catch (error) {
       log('请求守门状态读取失败', error)
@@ -144,7 +162,8 @@ export function createRequestGate(options = {}) {
 /**
  * 离线兜底：LLM 不可用时，用本地情绪规则挑一句。
  *
- * 这条路径同步完成，不引入新的 await 点；失败就返回 null，让调用方保留原来的错误码。
+ * replyTo 本身是异步的：await chain.generate 走的是本地规则链，不碰网络；
+ * 失败就返回 null，让调用方保留原来的错误码。
  */
 export function createOfflineReply(options = {}) {
   const { getSettings = () => ({}), log = () => {} } = options

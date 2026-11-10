@@ -20,7 +20,11 @@ const RECENT_LIMIT = 8
 export function photoFileName(at = new Date()) {
   const pad = (value) => String(value).padStart(2, '0')
   const date = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}`
-  const time = `${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`
+  // 精确到秒时，同一秒里的两个通道（聊天触发 + 手动按键）会互相覆盖；
+  // 补上毫秒位后仍然按名字有序，同名碰撞基本不可能。
+  const time =
+    `${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}` +
+    `${String(at.getMilliseconds()).padStart(3, '0')}`
   return `selfie-${date}-${time}.png`
 }
 
@@ -137,10 +141,13 @@ export function wantsSelfie(text) {
  *
  * 群聊里只认主人：陌生人的一句「拍张照」不该把桌面画面要走。
  */
-export function shouldSelfieInChat({ text, chatType, isOwner } = {}) {
+export function shouldSelfieInChat({ text, chatType, isOwner = true } = {}) {
   if (!wantsSelfie(text)) return false
   if (chatType === 'group') return isOwner === true
-  return chatType === 'private'
+  // 私聊也要验主人：陌生人的私聊同样不该把桌面画面要走。
+  // isOwner 默认 true，没传这个字段的旧调用行为不变。
+  if (chatType === 'private') return isOwner !== false
+  return false
 }
 
 /**

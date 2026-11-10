@@ -20,6 +20,7 @@ const WEATHER_ENDPOINT = 'https://api.open-meteo.com/v1/forecast'
 import { createPresenceGate } from './presence-gate.mjs'
 import { parseEmojiTag } from './companion.mjs'
 import { pickWeatherAlert, describeWeatherAlert } from './weather-alert.mjs'
+import { CITY_COORDS, resolveCity } from './city-coords.mjs'
 import {
   buildLifestyle,
   describeLifestyle,
@@ -33,24 +34,10 @@ export const MAX_LINE_CHARS = 40
 const WEATHER_TTL_MS = 15 * 60 * 1000
 
 /**
- * 常见城市坐标。设置里填了别的名字也不报错，回落到重庆，
- * 并在返回体里标 requested，方便设置页如实显示用的是哪座城。
+ * 城市坐标来自 city-coords.mjs：全国地级行政区 342 个，带名称归一化与治所别名。
+ * 认不出就回落 DEFAULT_CITY，但返回体保留 requested，
+ * 设置页据此如实说明「你填的没生效，实际用的是哪座城」。
  */
-const CITY_COORDS = {
-  重庆: { latitude: 29.5636, longitude: 106.5516 },
-  北京: { latitude: 39.9042, longitude: 116.4074 },
-  上海: { latitude: 31.2304, longitude: 121.4737 },
-  广州: { latitude: 23.1291, longitude: 113.2644 },
-  深圳: { latitude: 22.5431, longitude: 114.0579 },
-  成都: { latitude: 30.5728, longitude: 104.0668 },
-  杭州: { latitude: 30.2741, longitude: 120.1551 },
-  武汉: { latitude: 30.5928, longitude: 114.3055 },
-  西安: { latitude: 34.3416, longitude: 108.9398 },
-  南京: { latitude: 32.0603, longitude: 118.7969 },
-  天津: { latitude: 39.3434, longitude: 117.3616 },
-  苏州: { latitude: 31.2989, longitude: 120.5853 }
-}
-
 const DEFAULT_CITY = '重庆'
 
 /** WMO 天气代码 → 说话能用的中文。用不到的组合一律给「天气不明」。 */
@@ -154,15 +141,25 @@ export function weatherCodeToText(code) {
   return WEATHER_TEXT[code] ?? '天气不明'
 }
 
+/** 把接口字段读成有限数；null / 空串 / 缺失一律按 null，绝不把「没拿到」当 0。 */
+function asFiniteNumber(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string' && value.trim() === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
 /**
- * 取当前天气。失败返回 { ok: false, reason }，调用方据此少写一句天气，
- * 不重试、不缓存失败结果。
+ * 取当前天气。失败返回 { ok: false, reason }，调用方据此少写一句天气。
  */
 export async function fetchWeather(options) {
   const { city = DEFAULT_CITY, fetchImpl = globalThis.fetch, timeoutMs = 4000, now = null } = options ?? {}
   const name = String(city ?? '').trim() || DEFAULT_CITY
-  const coords = CITY_COORDS[name] ?? CITY_COORDS[DEFAULT_CITY]
-  const resolved = CITY_COORDS[name] === undefined ? DEFAULT_CITY : name
+  // resolveCity 负责归一化：「重庆市」「湖南益阳」「红河哈尼族彝族自治州」「延吉」都认。
+  // 认不出才回落默认城，resolved 与 requested 的差值就是给设置页看的证据。
+  const hit = resolveCity(name)
+  const coords = hit ?? CITY_COORDS[DEFAULT_CITY]
+  const resolved = hit ? hit.city : DEFAULT_CITY
 
   const url =
     `${WEATHER_ENDPOINT}?latitude=${coords.latitude}&longitude=${coords.longitude}` +
@@ -176,10 +173,11 @@ export async function fetchWeather(options) {
     if (!response.ok) return { ok: false, reason: `http-${response.status}` }
     const body = await response.json()
     const current = body?.current ?? {}
-    const temp = Number(current.temperature_2m)
-    const feels = Number(current.apparent_temperature)
-    const code = Number(current.weather_code)
-    if (!Number.isFinite(temp)) return { ok: false, reason: 'bad-payload' }
+    const temp = asFiniteNumber(current.temperature_2m)
+    if (temp === null) return { ok: false, reason: 'bad-payload' }
+    // 体感温度缺失时退回实际温度；字段为 null 时也退回，而不是把 null 读成 0℃。
+    const feels = asFiniteNumber(current.apparent_temperature)
+    const code = asFiniteNumber(current.weather_code)
     // 提醒只从逐小时预报里算，缺 hourly 就只是没有提醒，不影响当前天气。
     const anchor = now instanceof Date ? now : new Date()
     const alert = pickWeatherAlert(body?.hourly, { now: anchor })
@@ -188,10 +186,10 @@ export async function fetchWeather(options) {
       city: resolved,
       requested: name,
       temperature: Math.round(temp),
-      // 体感温度缺失时退回实际温度；两个都没有就不会走到这里。
-      feelsLike: Math.round(Number.isFinite(feels) ? feels : temp),
-      text: weatherCodeToText(code),
-      code: Number.isFinite(code) ? code : null,
+      feelsLike: Math.round(feels ?? temp),
+      // 天气代码缺失时不猜「晴」，如实说天气不明。
+      text: code === null ? '天气不明' : weatherCodeToText(code),
+      code,
       alert,
       alertNote: alert === null ? '' : describeWeatherAlert(alert, anchor)
     }
@@ -209,14 +207,41 @@ export async function fetchWeather(options) {
  * 这里明确「一句话、不用引号、不解释、不列举」。
  */
 export function buildBubblePrompt(context) {
-  const { nickname = '', personaText = '', timeCtx, weather = null, weatherAlertNote = '', mood = null, memoryDigest = '', recentLines = [], motions = null, companionNote = '', emojiCandidates = [], focusText = '', bodyNote = '', lifestyleNote = '', environmentNote = '', anniversaryNote = '', screenNote = '' } = context ?? {}
-  const who = nickname.trim() === '' ? '对方' : nickname.trim()
+  const {
+    nickname = '',
+    personaText = '',
+    timeCtx,
+    weather = null,
+    weatherAlertNote = '',
+    mood = null,
+    memoryDigest = '',
+    recentLines = [],
+    motions = null,
+    companionNote = '',
+    emojiCandidates = [],
+    focusText = '',
+    bodyNote = '',
+    lifestyleNote = '',
+    environmentNote = '',
+    anniversaryNote = '',
+    screenNote = ''
+  } = context ?? {}
+  const cleanNickname = typeof nickname === 'string' ? nickname.trim() : ''
+  const who = cleanNickname === '' ? '对方' : cleanNickname
+  // 记忆摘要与最近台词做类型守卫：显式传 null / 非数组不会抛 TypeError。
+  const digest = typeof memoryDigest === 'string' ? memoryDigest.trim() : ''
+  const lines = Array.isArray(recentLines)
+    ? recentLines.filter((item) => typeof item === 'string' && item.trim() !== '')
+    : []
 
   const facts = [
     `现在是${timeCtx.dateLabel} ${timeCtx.weekday} ${timeCtx.clock}，${timeCtx.hourLabel}。`
   ]
   if (weather !== null && weather.ok === true) {
     facts.push(`外面${weather.city}${weather.text}，${weather.temperature}℃。`)
+  } else if (weather !== null) {
+    // 请求失败（非用户主动关天气）时，明确告诉模型别自己编一套天气出来。
+    facts.push('天气数据暂时没拿到，不要编造天气。')
   }
   // 预警只报一条，而且是「预报里看着像」的口气，不冒充气象台。
   const alertNote = typeof weatherAlertNote === 'string' ? weatherAlertNote.trim() : ''
@@ -231,11 +256,11 @@ export function buildBubblePrompt(context) {
   if (mood !== null) {
     facts.push(`你此刻的状态：${mood.label}。`)
   }
-  if (memoryDigest.trim() !== '') {
-    facts.push(`你记得的事：${memoryDigest.trim()}`)
+  if (digest !== '') {
+    facts.push(`你记得的事：${digest}`)
   }
-  if (recentLines.length > 0) {
-    facts.push(`最近说过的话，别重复：${recentLines.join(' / ')}`)
+  if (lines.length > 0) {
+    facts.push(`最近说过的话，别重复：${lines.join(' / ')}`)
   }
   // 有话头到点时，只把这一条递到眼前；其他没聊完的事仍然留在陪伴层里。
   const focus = typeof focusText === 'string' ? focusText.trim() : ''
@@ -354,8 +379,9 @@ export function cleanBubbleLine(raw) {
   if (text === '') return null
   // 去掉整段包裹的引号 / 括号。
   text = text.replace(/^["'“”‘’「『（(]+/, '').replace(/["'“”‘’」』）)]+$/, '')
-  // 去掉「昔涟：」「她：」这类说话人前缀。
-  text = text.replace(/^[^：:\n]{1,8}[：:]\s*/, '')
+  // 去掉「昔涟：」「她：」这类说话人前缀；
+  // 排除「12:30 的时候」这类时间开头：数字冒号不是说话人。
+  text = text.replace(/^(?!\d{1,2}[:：])[^：:\n]{1,8}[：:]\s*/, '')
   // 只取第一行，再取第一个句号/问号/感叹号之前的部分。
   text = text.split(/\r?\n/)[0]
   const firstSentence = text.match(/^[^。！？!?]*[。！？!?]?/)
@@ -419,7 +445,7 @@ async function requestLine(options) {
     timeoutMs = 20_000
   } = options
 
-  async function requestOnce(temperature, extraHint) {
+  async function requestOnce(temperature, extraHint, maxTokens) {
     const controller = typeof AbortController === 'function' ? new AbortController() : null
     const timer = controller === null ? null : setTimeout(() => controller.abort(), timeoutMs)
     try {
@@ -435,8 +461,9 @@ async function requestLine(options) {
             { role: 'system', content: prompt.system },
             { role: 'user', content: extraHint === '' ? prompt.user : `${prompt.user}\n${extraHint}` }
           ],
-          // 只用来挡住「只回一个标记」；推理模型的 reasoning 也占预算，80 会把它耗空。
-          max_tokens: 320,
+          // 推理模型的 reasoning 也占预算：deepseek-reasoner 给足额度，
+          // 普通模型维持 320 挡住「只回一个标记」。
+          max_tokens: maxTokens,
           temperature
         }),
         ...(controller === null ? {} : { signal: controller.signal })
@@ -466,11 +493,12 @@ async function requestLine(options) {
     }
   }
 
-  const first = await requestOnce(1.05, '')
+  const isReasoner = String(model ?? '').includes('reasoner')
+  const first = await requestOnce(1.05, '', isReasoner ? 800 : 320)
   if (first.ok === true) return first
   // 网络/超时/HTTP 错误重试没有意义；只对「模型回了个空」再给一次机会。
   if (first.reason !== 'empty') return first
-  const second = await requestOnce(0.85, '直接说一句 40 字以内的话，不要只写动作或表情标记。')
+  const second = await requestOnce(0.85, '直接说一句 40 字以内的话，不要只写动作或表情标记。', 800)
   if (second.ok === true) return second
   return { ...second, detail: second.detail ?? first.detail }
 }
@@ -491,6 +519,9 @@ export function createPresenceService(options) {
     getMotionCatalog = null,
     // 陪伴层：可选。没注入时主动说话仍按时间与陪伴推导的轻量心情走。
     getCompanion = null,
+    // 情绪决策：可选。注入后状态栏会把「余波 + 表情实验」的结果一起带出去。
+    // 不注入时退回按心情档位映射，行为与旧版一致。
+    decideEmotion = null,
     // 身体层：可选。只给一句体感，不传就少一段，不影响这句话本身。
     getBodyNote = null,
     // 余额 / 电脑状态：可选。拿不到或采样过期就当作没看见。
@@ -499,6 +530,9 @@ export function createPresenceService(options) {
     getAnniversaryNote = null,
     // 识屏：可选。没打开或读不到就当作没看见。
     getScreenNote = null,
+    // 余额是否真的低于阈值：可选。由上层读余额监控的真实状态，
+    // 「设了提醒阈值」不等于「余额真的低」。
+    getBalanceLow = null,
     fetchImpl = globalThis.fetch,
     log = () => {},
     now = () => new Date(),
@@ -508,7 +542,8 @@ export function createPresenceService(options) {
   } = options
 
   const restored = readPersistedState()
-  let sessionStartedAt = now()
+  // 这次开机陪了多久也跨重启：连着陪了三个小时，重启不该清零。
+  let sessionStartedAt = toDateOrNull(restored?.sessionStartedAt) ?? now()
   let lastContactAt = toDateOrNull(restored?.lastContactAt)
   let weatherCache = null
   const recentLines = []
@@ -531,6 +566,7 @@ export function createPresenceService(options) {
     try {
       saveState({
         lastContactAt: lastContactAt === null ? null : lastContactAt.toISOString(),
+        sessionStartedAt: sessionStartedAt.toISOString(),
         gate: gate.snapshot()
       })
     } catch (error) {
@@ -542,11 +578,28 @@ export function createPresenceService(options) {
     return getSettings() ?? {}
   }
 
+  function balanceLowNow() {
+    try {
+      return typeof getBalanceLow === 'function' && getBalanceLow() === true
+    } catch {
+      return false
+    }
+  }
+
   async function currentWeather() {
     const stamp = now().getTime()
     if (weatherCache !== null && stamp - weatherCache.at < WEATHER_TTL_MS) return weatherCache.value
     const city = readSettings()?.presence?.city
-    const value = await fetchWeather({ city, fetchImpl })
+    // 超时放宽到 6 秒，网络偶发抖动时重试一次，减少「天气拿不到就少写天气」的概率。
+    let value = await fetchWeather({ city, fetchImpl, timeoutMs: 6000 })
+    if (value.ok !== true) {
+      value = await fetchWeather({ city, fetchImpl, timeoutMs: 6000 })
+    }
+    if (value.ok !== true) {
+      log('[presence] 天气获取失败', value?.reason ?? 'unknown', '城市:', String(city ?? ''))
+      // 失败结果不缓存：一次网络抖动不该让接下来 15 分钟都拿不到天气。
+      return value
+    }
     weatherCache = { at: stamp, value }
     return value
   }
@@ -555,11 +608,17 @@ export function createPresenceService(options) {
    * 今天是什么日子、外面该穿什么。
    *
    * 节日不依赖天气；天气拿不到时只缺穿搭，不会把节日一起吞掉。
-   * 关掉天气开关时同样保留节日。
+   * 关掉天气开关时同样保留节日。prefetched 给 nextLine 复用同一份天气，
+   * 避免「判断一次开关、又按开关再取一次」的双重判断散在两处。
    */
-  async function currentLifestyle() {
+  async function currentLifestyle(prefetched = undefined) {
     const settings = readSettings()
-    const weather = settings?.presence?.useWeather === false ? null : await currentWeather()
+    const weather =
+      prefetched !== undefined
+        ? prefetched
+        : settings?.presence?.useWeather === false
+          ? null
+          : await currentWeather()
     const feelsLike =
       weather !== null && weather.ok === true
         ? typeof weather.feelsLike === 'number'
@@ -579,11 +638,12 @@ export function createPresenceService(options) {
     persistPresence()
   }
 
-  function noteSpoken(line) {
+  function noteSpoken(line, reason = 'auto') {
     if (typeof line !== 'string' || line.trim() === '') return
     recentLines.push(line.trim())
     while (recentLines.length > 5) recentLines.shift()
-    gate.noteSpoken()
+    // 手动 / 试一句 / 兜底句不占「主动开口」的每日额度；自动开口的额度在
+    // nextLine 开头已经用 claim 原子占好，这里只记台词与账本。
     persistPresence()
   }
 
@@ -597,12 +657,13 @@ export function createPresenceService(options) {
     const settings = readSettings()
     const timeCtx = timeContext(now())
 
-    const gateResult = gate.check({ settings, reason, lastContactAt })
-    if (gateResult.ok === false) {
+    // 检查与占位在同一个同步调用里完成：三条入口并发时也不可能同时通过额度。
+    const claimResult = gate.claim({ settings, reason, lastContactAt })
+    if (claimResult.ok === false) {
       return {
         ok: false,
-        reason: gateResult.reason,
-        detail: gateResult.detail,
+        reason: claimResult.reason,
+        detail: claimResult.detail,
         line: '',
         source: 'gate',
         blocked: true,
@@ -615,11 +676,12 @@ export function createPresenceService(options) {
       now: now(),
       sessionStartedAt,
       lastContactAt,
-      balanceLow: settings?.modules?.['builtin.balance']?.warnBelow > 0
+      balanceLow: balanceLowNow()
     })
 
+    // 天气只取一次：下一句的穿搭也复用这一份，不在两个函数里各判一次开关。
     const weather = settings?.presence?.useWeather === false ? null : await currentWeather()
-    const lifestyle = await currentLifestyle()
+    const lifestyle = await currentLifestyle(weather)
 
     // 陪伴层给的是「跨对话一直在的自己」：真实心情、没聊完的话头、能配哪几张图。
     // 任何一项拿不到都只是少一段，不影响这句话本身。
@@ -664,8 +726,10 @@ export function createPresenceService(options) {
     }
 
     if (apiKey === '') {
+      // 兜底句不占额度：已经占位的名额退回去，别让一次配置问题烧掉一天的开口。
+      if (claimResult.claimed === true) gate.release()
       const line = fallbackLine(timeCtx, mood)
-      noteSpoken(line)
+      noteSpoken(line, reason)
       return { ok: false, reason: 'no-key', line, source: 'fallback', timeCtx, mood, weather }
     }
 
@@ -678,12 +742,14 @@ export function createPresenceService(options) {
     })
     if (result.ok === false) {
       log('[presence] 生成失败', result.reason)
+      // 模型失败退的本地句同样不烧额度：连续失败不该把今天的主动开口全用光。
+      if (claimResult.claimed === true) gate.release()
       const line = fallbackLine(timeCtx, mood)
-      noteSpoken(line)
+      noteSpoken(line, reason)
       return { ok: false, reason: result.reason, line, source: 'fallback', timeCtx, mood, weather }
     }
 
-    noteSpoken(result.line)
+    noteSpoken(result.line, reason)
     return {
       ok: true,
       line: result.line,
@@ -702,27 +768,71 @@ export function createPresenceService(options) {
    * 状态栏用：只算心情，不取天气、不动网络。
    * 规则与 nextLine 里那份完全一致，避免状态栏和台词各说各的。
    */
+  /**
+   * 心情档位 → 表情情绪。
+   *
+   * 和渲染层 expression.mjs 的 MOOD_LEVEL_EMOTION 保持一致。
+   * 四档心情只够选四张脸；等余波接进来以后，这里换成
+   * emotionRuntime.decideExpression() 的 tag 就行，通道协议不用再改。
+   */
+  const MOOD_EMOTION = {
+    calm: 'gentle',
+    bright: 'happy',
+    clingy: 'shy',
+    sleepy: 'tired'
+  }
+
   function currentMood() {
     const settings = readSettings()
-    return moodSnapshot({
+    const mood = moodSnapshot({
       now: now(),
       sessionStartedAt,
       lastContactAt,
-      balanceLow: settings?.modules?.['builtin.balance']?.warnBelow > 0
+      balanceLow: balanceLowNow()
     })
+    // emotion 给渲染层选表情用；mood 本身的 label / level 保持原样，不改变旧调用方。
+    const baseEmotion = MOOD_EMOTION[mood?.level] ?? 'neutral'
+    let emotion = baseEmotion
+    if (typeof decideEmotion === 'function') {
+      try {
+        // 传 'neutral' 表示「这一轮没有新的明确情绪」，让余波有机会接管。
+        // 直接拿心情档位去问的话，余波永远进不来：它只在 base 为 neutral 时才被读取。
+        const afterglow = decideEmotion('neutral')
+        // 只认 changed === true：关闭、对照组、内部出错都会返回 changed=false，
+        // 这时候 tag 不可信，必须守住心情档位。
+        if (
+          afterglow !== null &&
+          afterglow.changed === true &&
+          typeof afterglow.tag === 'string' &&
+          afterglow.tag !== ''
+        ) {
+          emotion = afterglow.tag
+        }
+      } catch (error) {
+        // 表情决策坏了不能让状态栏跟着坏；退回档位映射就够了。
+        log('[presence] 情绪决策失败', String(error?.message ?? error))
+      }
+    }
+    return { ...mood, emotion }
   }
 
   /** 设置页诊断用：此刻会给模型看什么。不含密钥。 */
   async function peekContext() {
     const settings = readSettings()
     const timeCtx = timeContext(now())
-    const mood = moodSnapshot({ now: now(), sessionStartedAt, lastContactAt })
+    // 与 nextLine / currentMood 同一份心情口径：余额偏低也传进去。
+    const mood = moodSnapshot({
+      now: now(),
+      sessionStartedAt,
+      lastContactAt,
+      balanceLow: balanceLowNow()
+    })
     const weather = settings?.presence?.useWeather === false ? null : await currentWeather()
     return {
       time: timeCtx,
       mood,
       weather,
-      lifestyle: await currentLifestyle(),
+      lifestyle: await currentLifestyle(weather),
       sessionMinutes: Math.max(0, Math.round((now().getTime() - sessionStartedAt.getTime()) / 60000)),
       recentLines: [...recentLines]
     }

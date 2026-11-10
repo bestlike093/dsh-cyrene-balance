@@ -1,3 +1,5 @@
+import { resolveDriverActionKey, resolveNativeMotion } from './action-name-map.mjs'
+
 /**
  * 动作系统：让心情和 AI 都能驱动立绘动起来。
  *
@@ -321,15 +323,34 @@ export function createMotionController(options = {}) {
       return { ok: false, reason: 'no-model' }
     }
     const cap = capability ?? refresh()
-    const key = resolveActionKey(request)
-    if (key === null) {
+    // 程序化表里没有：先试驱动的中文动作名映射（点头 / 张望等），
+    // 再看模型自带动作组有没有同名动作 —— 驱动里「模型没有的动作找相近的」。
+    let key = resolveActionKey(request)
+    if (key === null) key = resolveDriverActionKey(request)
+    const directNative = key === null ? resolveNativeMotion(cap, request) : null
+    if (key === null && directNative === null) {
       return { ok: false, reason: 'unknown-action' }
     }
     const at = now()
     if (active !== null) return { ok: false, reason: 'busy' }
+    const dedupeKey = key === null ? `native:${directNative.group}#${directNative.index}` : key
     // 同一动作冷却期内不重复播；换动作则允许打断后的空档立即播。
-    if (key === lastKey && at - lastPlayedAt < cooldownMs) {
+    if (dedupeKey === lastKey && at - lastPlayedAt < cooldownMs) {
       return { ok: false, reason: 'busy' }
+    }
+
+    // AI 报了素材自带的动作名（如 Sleep）：不经程序化动作表，直接播原生。
+    if (directNative !== null) {
+      try {
+        if (directNative.expression === true) model.expression(directNative.name)
+        else model.motion(directNative.group, directNative.index)
+      } catch (error) {
+        return { ok: false, reason: `native-failed:${error instanceof Error ? error.message : String(error)}` }
+      }
+      lastKey = dedupeKey
+      lastPlayedAt = at
+      emit({ key: dedupeKey, channel: 'native', motion: directNative.name, source: meta.source ?? 'auto' })
+      return { ok: true, channel: 'native', key: dedupeKey }
     }
 
     const action = ACTION_TABLE[key]

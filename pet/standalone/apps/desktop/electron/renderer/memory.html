@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' file: data: pet-media:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
+    <title>记忆观察台</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./theme.css" />
+    <link rel="stylesheet" href="./memory.css" />
+  </head>
+  <body>
+    <header class="m-head">
+      <div class="m-head-text">
+        <h1>记忆观察台</h1>
+        <p class="m-lead">
+          主人、私聊、群聊各看各的。QQ 只给 openid，所以群友用代号显示；没读到的地方会空着。
+        </p>
+      </div>
+      <div class="m-actions">
+        <button type="button" id="m-refresh" class="m-ghost">再看一眼</button>
+        <button type="button" id="m-close" class="m-close" aria-label="关闭">×</button>
+      </div>
+    </header>
+
+    <main class="m-grid">
+      <section class="m-col">
+        <div class="m-col-head">
+          <h2>主人</h2>
+          <span class="m-count" id="m-owner-count">0</span>
+        </div>
+        <p class="m-hint">几个主人账号共用这条线，换设备也接得上。</p>
+        <div class="m-list" id="m-owner-list"></div>
+      </section>
+
+      <section class="m-col">
+        <div class="m-col-head">
+          <h2>私聊</h2>
+          <span class="m-count" id="m-private-count">0</span>
+        </div>
+        <p class="m-hint">只在这个人这一对一里说过的话。</p>
+        <div class="m-list" id="m-private-list"></div>
+      </section>
+
+      <section class="m-col">
+        <div class="m-col-head">
+          <h2>群聊</h2>
+          <span class="m-count" id="m-group-count">0</span>
+        </div>
+        <p class="m-hint">按群分组，再按发言人分开。官方只推被 @ 的消息。</p>
+        <div class="m-list" id="m-group-list"></div>
+      </section>
+    </main>
+
+    <p class="m-foot" id="m-foot">正在读快照……</p>
+
+    <script src="./memory.js"></script>
+  </body>
+</html>

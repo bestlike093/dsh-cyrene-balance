@@ -52,6 +52,8 @@ export function createInsightService(options = {}) {
     affinity = null,
     proactiveGate = null,
     handoffStore = null,
+    // 只在观察台展示用：哪些 QQ 私聊被主人单独放开了贴近时刻。
+    getIntimacyPeers = null,
     now = Date.now,
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
     log = () => {}
@@ -111,6 +113,7 @@ export function createInsightService(options = {}) {
     const profileMap = new Map(profiles.map((item) => [item.scope, item]))
 
     const scopes = new Set([...Object.keys(counts), ...lastAt.keys(), ...profileMap.keys()])
+    const intimacyPeers = attempt('intimacy peers', () => getIntimacyPeers?.()) ?? {}
     return [...scopes]
       .map((scope) => {
         const profile = profileMap.get(scope) ?? null
@@ -120,6 +123,8 @@ export function createInsightService(options = {}) {
           scope,
           messages: asNumber(counts[scope]),
           lastAt: lastAt.get(scope) ?? 0,
+          // 贴近时刻只对 QQ 私聊有意义：桌面永在，群聊永不。
+          intimacy: intimacyPeers[scope] === true,
           // 好感、锁定与档位展示只给数值和描述，不带她写下的印象、关系原文。
           favor: bond === null || bond === undefined ? null : asNumber(bond.favor),
           locked: bond?.locked === true,

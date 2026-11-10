@@ -810,12 +810,16 @@ function bind() {
     tab.addEventListener('click', () => {
       const key = tab.dataset.panel
       setActivePanel(key)
-      if (key === 'memory' && memoryState.items.length === 0) void loadMemory(true)
+      if (key === 'memory') {
+        if (memoryState.items.length === 0) void loadMemory(true)
+        ensureScopes()
+      }
     })
   }
 
   $('i-refresh').addEventListener('click', () => {
     void refresh({ force: true })
+    if (scopesLoaded) void loadScopes()
   })
 
   $('i-close').addEventListener('click', () => {
@@ -864,10 +868,330 @@ const VALID_TABS = new Set(['today', 'mind', 'proactive', 'bonds', 'memory'])
 function focusTab(tab) {
   if (typeof tab !== 'string' || !VALID_TABS.has(tab)) return
   setActivePanel(tab)
-  if (tab === 'memory' && memoryState.items.length === 0) void loadMemory(true)
+  if (tab === 'memory') {
+    if (memoryState.items.length === 0) void loadMemory(true)
+    ensureScopes()
+  }
 }
 
 focusTab(new URLSearchParams(window.location.search).get('tab'))
 if (window.pet?.onInsightTab) {
   window.pet.onInsightTab(focusTab)
+}
+
+/* ---------- 记忆：QQ 三份快照（并进观察台） ---------- */
+
+let scopesLoaded = false
+
+function mCodeOf(id) {
+  const value = String(id ?? '')
+  if (value === '') return '未知'
+  return value.length <= 10 ? value : `…${value.slice(-8)}`
+}
+
+function mTimeText(at) {
+  const value = Number(at)
+  if (!Number.isFinite(value) || value <= 0) return '还没动过'
+  const diff = Date.now() - value
+  if (diff < 60 * 1000) return '刚刚'
+  if (diff < 60 * 60 * 1000) return `${Math.floor(diff / (60 * 1000))} 分钟前`
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / (60 * 60 * 1000))} 小时前`
+  return `${Math.floor(diff / (24 * 60 * 60 * 1000))} 天前`
+}
+
+function mPeerOf(peers, key) {
+  return peers.find((item) => item.key === key) ?? null
+}
+
+/* 观察台只说档位，不摆裸数值：73 和 68 之间她其实没有区别，
+   写出来只会让人拿两个数字比大小。边界跟 lib/companion/snapshot.mjs
+   的基准档一致；桌面端暂未接入人格推导，先用基准忍受度 55。 */
+const M_AFFINITY_BANDS = [
+  { max: 19, label: '还陌生' },
+  { max: 49, label: '有点熟' },
+  { max: 79, label: '亲近' },
+  { max: Infinity, label: '很亲近' }
+]
+const M_FAMILIAR_BANDS = [
+  { max: 0, label: '刚认识' },
+  { max: 29, label: '还生疏' },
+  { max: 69, label: '渐渐熟了' },
+  { max: Infinity, label: '已经很熟' }
+]
+const M_FRICTION_BANDS = [
+  { max: 59, label: '平静' },
+  { max: 84, label: '有点烦' },
+  { max: Infinity, label: '很烦' }
+]
+
+function mBandOf(value, bands) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return ''
+  for (const band of bands) if (n <= band.max) return band.label
+  return bands[bands.length - 1].label
+}
+
+function mTagNode(content, plain = false) {
+  const node = document.createElement('span')
+  node.className = plain ? 'm-tag is-plain' : 'm-tag'
+  node.textContent = content
+  return node
+}
+
+function mScopeEmpty(content) {
+  const node = document.createElement('div')
+  node.className = 'm-empty'
+  node.textContent = content
+  return node
+}
+
+function mScopeItem(title, count, lastAt, peer, intimacyScope = '') {
+  const box = document.createElement('div')
+  box.className = 'm-item'
+
+  const head = document.createElement('div')
+  head.className = 'm-item-head'
+  const name = document.createElement('span')
+  name.className = 'm-name'
+  name.textContent = title
+  head.appendChild(name)
+  const meta = document.createElement('span')
+  meta.className = 'm-meta'
+  meta.textContent = mTimeText(lastAt)
+  head.appendChild(meta)
+  box.appendChild(head)
+
+  const tags = document.createElement('div')
+  tags.className = 'm-tags'
+  tags.appendChild(mTagNode(`${count} 条`, true))
+  if (peer !== null) {
+    tags.appendChild(mTagNode(`关系 ${mBandOf(peer.affinity, M_AFFINITY_BANDS)}`))
+    if (peer.familiarity > 0) {
+      tags.appendChild(mTagNode(`熟悉度 ${mBandOf(peer.familiarity, M_FAMILIAR_BANDS)}`))
+    }
+    if (peer.irritation > 0) {
+      tags.appendChild(mTagNode(`情绪 ${mBandOf(peer.irritation, M_FRICTION_BANDS)}`))
+    }
+  }
+  box.appendChild(tags)
+
+  // 烦的时候才给这一下：递过去，等她下一轮自己读。
+  if (peer !== null && peer.irritation > 0 && typeof intimacyScope === 'string' && intimacyScope !== '') {
+    box.appendChild(mFrictionRow(intimacyScope))
+  }
+
+  // 贴近时刻只对 QQ 私聊给开关：桌面不在这里改，群聊永远不给。
+  if (typeof intimacyScope === 'string' && intimacyScope.startsWith('qq:private:')) {
+    box.appendChild(mIntimacyRow(intimacyScope))
+  }
+
+  return box
+}
+
+/** 哪些私聊被主人单独放开过；未出现的一律按关闭处理。 */
+let intimacyPeers = {}
+
+async function loadIntimacyPeers() {
+  try {
+    const current = await window.pet.getSettings()
+    intimacyPeers = current?.companion?.intimacy?.peers ?? {}
+  } catch {
+    intimacyPeers = {}
+  }
+}
+
+function mIntimacyRow(scope) {
+  const row = document.createElement('label')
+  row.className = 'm-switch'
+  const input = document.createElement('input')
+  input.type = 'checkbox'
+  input.checked = intimacyPeers[scope] === true
+  const caption = document.createElement('span')
+  caption.textContent = '贴近时刻'
+  input.addEventListener('change', async () => {
+    const want = input.checked === true
+    input.disabled = true
+    try {
+      const result = await window.pet.setInsightIntimacy(scope, want)
+      if (result?.ok !== true) {
+        input.checked = want !== true
+        return
+      }
+      intimacyPeers[scope] = want
+    } catch {
+      input.checked = want !== true
+    } finally {
+      input.disabled = false
+    }
+  })
+  row.appendChild(input)
+  row.appendChild(caption)
+  return row
+}
+
+/* 观察台改不了她加密的状态，只能递一句话过去；下一轮开口前她自己会读到。 */
+function mFrictionRow(scope) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'm-quiet'
+  button.textContent = '让她消气'
+  button.addEventListener('click', async () => {
+    button.disabled = true
+    try {
+      const result = await window.pet.setInsightFriction(scope, 0)
+      if (result?.ok !== true) {
+        button.disabled = false
+        return
+      }
+      button.textContent = '递过去了，等她下一轮读到'
+    } catch {
+      button.disabled = false
+    }
+  })
+  return button
+}
+
+function mGroupCard(entry, peers) {
+  const box = document.createElement('div')
+  box.className = 'm-item'
+
+  const head = document.createElement('div')
+  head.className = 'm-item-head'
+  const name = document.createElement('span')
+  name.className = 'm-name'
+  name.textContent = `群 ${mCodeOf(entry.scopeId)}`
+  head.appendChild(name)
+  const meta = document.createElement('span')
+  meta.className = 'm-meta'
+  meta.textContent = mTimeText(entry.lastAt)
+  head.appendChild(meta)
+  box.appendChild(head)
+
+  const tags = document.createElement('div')
+  tags.className = 'm-tags'
+  tags.appendChild(mTagNode(`${entry.count} 条`, true))
+  tags.appendChild(mTagNode(`${Array.isArray(entry.peers) ? entry.peers.length : 0} 个发言人`, true))
+  box.appendChild(tags)
+
+  const list = Array.isArray(entry.peers) ? entry.peers : []
+  if (list.length === 0) {
+    box.appendChild(mScopeEmpty('这个群还没有按人分开的记录。'))
+    return box
+  }
+
+  const sub = document.createElement('div')
+  sub.className = 'm-sub'
+  for (const person of list) {
+    const row = document.createElement('div')
+    row.className = 'm-sub-row'
+    const left = document.createElement('span')
+    left.className = 'm-sub-name'
+    const peer = mPeerOf(peers, `qq:group:${entry.scopeId}#${person.peer}`)
+    const bits = [`${mCodeOf(person.peer)} · ${person.count} 条`]
+    if (peer !== null) bits.push(`关系 ${mBandOf(peer.affinity, M_AFFINITY_BANDS)}`)
+    if (peer !== null && peer.irritation > 0) {
+      bits.push(`情绪 ${mBandOf(peer.irritation, M_FRICTION_BANDS)}`)
+    }
+    left.textContent = bits.join(' · ')
+    row.appendChild(left)
+    const right = document.createElement('span')
+    right.className = 'm-meta'
+    right.textContent = mTimeText(person.lastAt)
+    row.appendChild(right)
+    sub.appendChild(row)
+  }
+  box.appendChild(sub)
+
+  return box
+}
+
+function renderScopes(data) {
+  const scopes = data.scopes ?? {}
+  const peers = Array.isArray(data.peers) ? data.peers : []
+  const owners = Array.isArray(scopes.owners) ? scopes.owners : []
+  const privates = Array.isArray(scopes.privates) ? scopes.privates : []
+  const groups = Array.isArray(scopes.groups) ? scopes.groups : []
+
+  $('i-owner-count').textContent = String(owners.length)
+  $('i-private-count').textContent = String(privates.length)
+  $('i-group-count').textContent = String(groups.length)
+
+  const ownerList = $('i-owner-list')
+  ownerList.replaceChildren()
+  if (owners.length === 0) {
+    ownerList.appendChild(mScopeEmpty('还没有主人这条线的记录。'))
+  } else {
+    for (const entry of owners) {
+      const peer = mPeerOf(peers, `qq:private:${entry.scopeId}`) ?? mPeerOf(peers, 'desktop')
+      ownerList.appendChild(
+        mScopeItem(
+          `主人 ${mCodeOf(entry.scopeId)}`,
+          entry.count,
+          entry.lastAt,
+          peer,
+          `qq:private:${entry.scopeId}`,
+        ),
+      )
+    }
+  }
+
+  const privateList = $('i-private-list')
+  privateList.replaceChildren()
+  if (privates.length === 0) {
+    privateList.appendChild(mScopeEmpty('还没有别人私聊过她。'))
+  } else {
+    for (const entry of privates) {
+      privateList.appendChild(
+        mScopeItem(
+          `私聊 ${mCodeOf(entry.scopeId)}`,
+          entry.count,
+          entry.lastAt,
+          mPeerOf(peers, `qq:private:${entry.scopeId}`),
+          `qq:private:${entry.scopeId}`,
+        ),
+      )
+    }
+  }
+
+  const groupList = $('i-group-list')
+  groupList.replaceChildren()
+  if (groups.length === 0) {
+    groupList.appendChild(mScopeEmpty('还没有群聊记录。群里只有被 @ 的消息会到这边。'))
+  } else {
+    for (const entry of groups) groupList.appendChild(mGroupCard(entry, peers))
+  }
+
+  const note = $('i-scopes-note')
+  const parts = [`快照 ${mTimeText(data.at)}`, `插件侧共 ${Number(data.itemCount) || 0} 条`]
+  const vaultError = typeof data.vaultError === 'string' ? data.vaultError : ''
+  if (vaultError !== '') parts.push(`仓库打不开：${vaultError}`)
+  if (note !== null) note.textContent = parts.join(' · ')
+}
+
+function failScopes(reason, file) {
+  const note = $('i-scopes-note')
+  if (note === null) return
+  if (reason === 'not-ready') {
+    note.textContent = '插件还没写出快照。等她在 DSH 里说过一句话再刷新。'
+  } else {
+    note.textContent = `读取失败：${reason}${typeof file === 'string' ? `（${file}）` : ''}`
+  }
+}
+
+async function loadScopes() {
+  if (typeof window.pet.getMemoryConsole !== 'function') {
+    failScopes('bridge-missing')
+    return
+  }
+  // 先取开关状态，再渲染列表；读不到就按全关显示。
+  await loadIntimacyPeers()
+  const data = await window.pet.getMemoryConsole()
+  if (data?.ok === true) renderScopes(data)
+  else failScopes(String(data?.reason ?? 'unknown'), data?.file)
+}
+
+function ensureScopes() {
+  if (scopesLoaded) return
+  scopesLoaded = true
+  void loadScopes()
 }

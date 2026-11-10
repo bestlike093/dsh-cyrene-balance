@@ -79,6 +79,18 @@
   --disabled-opacity-strong: 0.6;
 
   --bg: var(--surface-solid);
+
+  /* 独立子窗口（背景库 / 会话 / 表情库）用的短名。
+     它们历史上写的是 --pet-*，但这里从未定义过，于是全部落到各自 CSS 里
+     硬编码的粉色回退值，表现就是「主题选了天青，背景库还是粉的」。
+     统一映射到同一组 token，主题一换子窗口就跟着换。 */
+  --pet-bg: var(--surface-solid);
+  --pet-fg: var(--ink);
+  --pet-muted: var(--muted);
+  --pet-line: var(--line);
+  --pet-accent: var(--accent);
+  --pet-accent-deep: var(--accent-deep);
+  --pet-soft: var(--accent-soft);
 }
 
 [data-theme='pink'] {

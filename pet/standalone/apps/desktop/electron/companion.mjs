@@ -102,8 +102,11 @@ export function parseEmojiTag(raw, allowedIds = null) {
   if (tags.length === 0) return { text: raw, emojiId: null }
 
   const isAllowed = (id) => {
-    if (allowedIds === null) return true
-    return Array.isArray(allowedIds) ? allowedIds.includes(id) : allowedIds.has(id)
+    if (allowedIds === null || allowedIds === undefined) return true
+    if (Array.isArray(allowedIds)) return allowedIds.includes(id)
+    // 只认 Set 一类的可查询集合；传成别的形状按「都不许」处理，不抛 TypeError。
+    if (typeof allowedIds?.has === 'function') return allowedIds.has(id)
+    return false
   }
 
   // 只认第一个合法 id；但所有标记都要摘掉，模型写两个或编出非法 id 时，
@@ -124,55 +127,84 @@ export function parseEmojiTag(raw, allowedIds = null) {
  *
  * 只在真有内容时输出对应的段落：没有相关记忆就不提「你记得」，
  * 免得模型为了填满格式去编一件根本没发生的事。
+ *
+ * 总长度兜底：超预算时按「先丢可再生的，再丢此刻的」整块丢弃——
+ * 表情候选每轮重新生成、丢得起；话头和心情是连续性的根，最后才动。
  */
 export function buildCompanionNote(turn, options = {}) {
   if (turn === null || typeof turn !== 'object') return ''
   const maxLoops = Number.isFinite(options.maxLoops) ? Math.max(0, Math.floor(options.maxLoops)) : MAX_LOOPS
-  const lines = []
+  const maxChars = Number.isFinite(options.maxChars) ? Math.max(120, Math.floor(options.maxChars)) : 500
+  const blocks = []
 
   if (typeof turn.moodNote === 'string' && turn.moodNote.trim() !== '') {
-    lines.push(`你此刻的心情：${turn.moodNote.trim()}。`)
+    blocks.push({ key: 'mood', text: `你此刻的心情：${turn.moodNote.trim()}。` })
   }
 
   // 节目单只给「此刻在做什么」和「接下来是什么」。
   // 铺开整张表会让每句话都变成日程播报。
   if (typeof turn.agendaNote === 'string' && turn.agendaNote.trim() !== '') {
-    lines.push('', '你现在正在过的这一天：', turn.agendaNote.trim())
+    blocks.push({ key: 'agenda', text: ['你现在正在过的这一天：', turn.agendaNote.trim()].join('\n') })
   }
 
   const memory = typeof turn.memoryNote === 'string' ? turn.memoryNote.trim() : ''
   if (memory !== '') {
-    lines.push(
-      '',
-      '下面是你记得的、和这句话有关的事。用得上的时候自然带一句，不要逐条复述，也不要说成「记录里写着」：',
-      memory
-    )
+    blocks.push({
+      key: 'memory',
+      text: [
+        '下面是你记得的、和这句话有关的事。用得上的时候自然带一句，不要逐条复述，也不要说成「记录里写着」：',
+        memory
+      ].join('\n')
+    })
   }
 
   const loops = Array.isArray(turn.openLoops)
     ? turn.openLoops.filter((item) => item !== null && typeof item?.text === 'string' && item.text.trim() !== '')
     : []
   if (loops.length > 0 && maxLoops > 0) {
-    lines.push('', '还有几件没聊完的事。想接就轻轻接一句，不必每条都提，也不要追问：')
-    for (const loop of loops.slice(-maxLoops)) lines.push(`- ${loop.text.trim()}`)
+    blocks.push({
+      key: 'loops',
+      text: ['还有几件没聊完的事。想接就轻轻接一句，不必每条都提，也不要追问：']
+        .concat(loops.slice(-maxLoops).map((loop) => `- ${loop.text.trim()}`))
+        .join('\n')
+    })
   }
 
   const emoji = Array.isArray(turn.emoji) ? turn.emoji.filter((item) => typeof item?.entry?.id === 'string') : []
   if (emoji.length > 0) {
+    // 只列前 3 张候选：清单越长越容易被预算截掉，反而一张都用不上。
     const names = emoji
+      .slice(0, 3)
       .map((item) => {
         const hint = EMOJI_HINTS[item.entry.id]
         return hint === undefined ? item.entry.id : `${item.entry.id}（${hint}）`
       })
       .join('、')
-    lines.push(
-      '',
-      `这一轮可以配一张小表情。想配就在整句末尾单独写 [图:id]，id 只能从这些里面挑：${names}。`,
-      '配不上就不写，不要为了配图硬凑，也不要用别的写法。'
-    )
+    blocks.push({
+      key: 'emoji',
+      text: [
+        `这一轮可以配一张小表情。想配就在整句末尾单独写 [图:id]，id 只能从这些里面挑：${names}。`,
+        '配不上就不写，不要为了配图硬凑，也不要用别的写法。'
+      ].join('\n')
+    })
   }
 
-  return lines.join('\n')
+  let text = blocks.map((block) => block.text).join('\n\n')
+  if (blocks.length > 0 && Array.from(text).length > maxChars) {
+    // 整块丢弃的顺序：记忆残段 → 表情候选 → 日程 → 话头；心情永不整块丢。
+    for (const key of ['memory', 'emoji', 'agenda', 'loops']) {
+      if (Array.from(text).length <= maxChars) break
+      const index = blocks.findIndex((block) => block.key === key)
+      if (index < 0) continue
+      blocks.splice(index, 1)
+      text = blocks.map((block) => block.text).join('\n\n')
+    }
+    if (Array.from(text).length > maxChars) {
+      text = `${Array.from(text).slice(0, maxChars).join('')}…`
+    }
+  }
+
+  return text
 }
 
 /**
@@ -204,6 +236,10 @@ export function createCompanionService(options = {}) {
   let loading = null
   let saveTimer = null
   let dirty = false
+  /** 上次读盘失败且无法确认原文件安全时置真：禁止写盘，绝不覆盖证据。 */
+  let loadFailed = false
+  /** 写盘串行化：定时器的 flush 与退出前的 flush 不会并发交错。 */
+  let saveChain = Promise.resolve(true)
   // 已经主动提过的话头 id；跟陪伴快照一起落盘，重启后不会重复提同一件事。
   const nudgedLoops = new Set()
   // 最近一次真正收到用户消息的时间；落盘后，「很久没联系」跨重启仍然成立。
@@ -245,7 +281,7 @@ export function createCompanionService(options = {}) {
     saveTimer.unref?.()
   }
 
-  /** 接回磁盘状态。只做一次；失败就带着空状态继续跑，下次对话照常。 */
+  /** 接回磁盘状态。只做一次；失败就带着空状态继续跑，但绝不写盘覆盖原文件。 */
   async function ready() {
     if (loaded) return core
     if (loading !== null) return loading
@@ -259,7 +295,9 @@ export function createCompanionService(options = {}) {
           }
         }
       } catch (error) {
-        log('陪伴状态读取失败，按新状态继续', error)
+        // 读坏了不等于「没有历史」：禁止后续写盘用空快照覆盖那份读不出的文件。
+        loadFailed = true
+        log('陪伴状态读取失败，按新状态继续；本次运行不再写盘，避免覆盖原文件', error)
       } finally {
         loaded = true
         loading = null
@@ -416,6 +454,7 @@ export function createCompanionService(options = {}) {
    * 传进来的不是今天的单也没关系，core 会把它挪成今天。
    */
   async function setAgenda(plan) {
+    if (!enabled()) return false
     if (plan === null || typeof plan !== 'object') return false
     const instance = await ready()
     try {
@@ -487,12 +526,15 @@ export function createCompanionService(options = {}) {
         .loops('open')
         .filter((item) => typeof item?.text === 'string' && item.text.trim() !== '')
         .filter((item) => !nudgedLoops.has(item.id))
+        // 缺 createdAt 的脏话头不参与回访：到期时间算不出来，宁可跳过也不乱催。
+        .filter((item) => Number.isFinite(Number(item.createdAt)))
         .filter((item) => {
           // 说了「明天」就等到明天上午，别当晚就问「面试怎么样了」；
           // 没有时间词的旧话头仍按最短间隔走。传 0 表示调试时立刻可读。
           if (minAgeMs <= 0) return true
-          const dueAt = typeof item.dueAt === 'number' ? item.dueAt : item.createdAt + minAgeMs
-          return nowMs >= Math.max(dueAt, item.createdAt + minAgeMs)
+          const createdAt = Number(item.createdAt)
+          const dueAt = Number.isFinite(Number(item.dueAt)) ? Number(item.dueAt) : createdAt + minAgeMs
+          return nowMs >= Math.max(dueAt, createdAt + minAgeMs)
         })
       if (due.length === 0) return null
 
@@ -529,6 +571,10 @@ export function createCompanionService(options = {}) {
     const instance = await ready()
     try {
       const agenda = instance.agenda
+      // 节目单缺段（数据坏 / 没生成）：不猜，这一拍不开口，等上层重新生成。
+      if (agenda === null || typeof agenda !== 'object' || !Array.isArray(agenda.segments)) {
+        return null
+      }
       const claimedSegmentIds = agenda.segments
         .filter((segment) => instance.claims.isClaimed(agenda.date, segment.id))
         .map((segment) => segment.id)
@@ -674,6 +720,8 @@ export function createCompanionService(options = {}) {
           ? decided.tag
           : moodEmotion
       const scene = inferScene(pickedEmotion, new Date(now()).getHours())
+      // limit 只认非负整数；0 表示这一轮一张都不给。
+      const count = Number.isFinite(Number(limit)) ? Math.max(0, Math.floor(Number(limit))) : 3
       return pickEmoji(
         {
           emotion: pickedEmotion,
@@ -681,7 +729,7 @@ export function createCompanionService(options = {}) {
           recentIds: instance.recentEmoji,
           ...(scene === undefined ? {} : { scene })
         },
-        { limit }
+        { limit: count }
       )
         .map((item) => item.entry.id)
         .filter((id) => typeof id === 'string')
@@ -693,6 +741,7 @@ export function createCompanionService(options = {}) {
 
   /** 只读快照，给设置页诊断用。不含原文对话。 */
   async function snapshot() {
+    if (!enabled()) return null
     const instance = await ready()
     try {
       return instance.snapshot()
@@ -702,36 +751,61 @@ export function createCompanionService(options = {}) {
     }
   }
 
-  /** 把攒着的改动立刻落盘；退出前调用。 */
+  /** 把攒着的改动立刻落盘；退出前调用。写盘串行化，读失败期间拒绝覆盖原文件。 */
   async function flush() {
     if (saveTimer !== null) {
       clearTimeout(saveTimer)
       saveTimer = null
     }
-    if (!dirty || typeof save !== 'function') return false
-    dirty = false
-    try {
-      await save({
+    if (typeof save !== 'function') return false
+    const run = async () => {
+      if (loadFailed) {
+        log('陪伴状态读取失败过，跳过写盘以避免覆盖原文件')
+        return false
+      }
+      if (!dirty) return true
+      // 先抓快照再清脏标记：保存期间进来的新变更会重新置 dirty，下一轮 flush 补写。
+      const payload = {
         ...core.toJSON(),
         nudgedLoops: [...nudgedLoops],
         lastUserAt
-      })
-      return true
-    } catch (error) {
-      // 写失败就留个脏标记，下次对话再试；不重试到死。
-      dirty = true
-      log('陪伴状态落盘失败', error)
-      return false
+      }
+      dirty = false
+      try {
+        await save(payload)
+        return true
+      } catch (error) {
+        // 写失败就留个脏标记，下次对话再试；不重试到死。
+        dirty = true
+        log('陪伴状态落盘失败', error)
+        return false
+      }
     }
+    // 两个 flush 并发时排成一队：后到的等先到的写完再执行，绝不互相覆盖。
+    saveChain = saveChain.then(run, run)
+    return saveChain
   }
 
-  /** 清空陪伴状态（设置页「忘掉这些」）。 */
+  /** 清空陪伴状态（设置页「忘掉这些」）。写盘失败时回滚内存，不假装成功。 */
   async function reset() {
+    const prevCore = core
+    const prevLoops = new Set(nudgedLoops)
+    const prevLastUserAt = lastUserAt
     core = new CompanionCore({ now, favor })
     nudgedLoops.clear()
     lastUserAt = null
     dirty = true
-    await flush()
+    // 用户主动清空是明确指令：即使之前读失败过也允许重新落盘。
+    loadFailed = false
+    const saved = await flush()
+    if (!saved) {
+      core = prevCore
+      nudgedLoops.clear()
+      for (const id of prevLoops) nudgedLoops.add(id)
+      lastUserAt = prevLastUserAt
+      dirty = true
+      return false
+    }
     return true
   }
 

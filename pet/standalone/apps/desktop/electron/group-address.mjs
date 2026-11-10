@@ -16,8 +16,8 @@
 
 /** 说完一句话之后，这算「还在同一条线上」的时间。 */
 const CONTINUATION_WINDOW_MS = 90_000
-/** 话题对得上至少要像到这个程度，太低会把寒暄也算成相关。 */
-const TOPIC_MIN_SIMILARITY = 0.12
+/** 话题对得上至少要像到这个程度，太低会让两个常见双字词沾一个边就命中。 */
+const TOPIC_MIN_SIMILARITY = 0.3
 /** 短到只有几个字的回应，像「嗯」「然后呢」，默认是在接话。 */
 const SHORT_REPLY_MAX = 6
 
@@ -25,6 +25,25 @@ export const ADDRESS_LEVELS = ['addressed', 'continuation', 'topic', 'ambient']
 
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+/** 单字唤醒词必须带词边界：「涟」不能命中「涟漪」里的「涟」。 */
+function isWordCharacter(char) {
+  return /[\u4e00-\u9fa5a-zA-Z0-9]/.test(char)
+}
+
+function containsWakeWord(text, word) {
+  const chars = Array.from(text)
+  const wordChars = Array.from(word)
+  // 两个字及以上的唤醒词按原样 includes；单字才需要看前后边界。
+  if (wordChars.length >= 2) return text.includes(word)
+  for (let index = 0; index < chars.length; index += 1) {
+    if (chars[index] !== wordChars[0]) continue
+    const before = index === 0 ? '' : chars[index - 1]
+    const after = index + 1 >= chars.length ? '' : chars[index + 1]
+    if (!isWordCharacter(before) && !isWordCharacter(after)) return true
+  }
+  return false
 }
 
 /** 中文没有空格，用相邻两字片段做很轻的相似度判断。 */
@@ -68,7 +87,7 @@ export function classifyGroupAddress(input = {}) {
   const wakeWords = Array.isArray(input.wakeWords) ? input.wakeWords : []
   for (const word of wakeWords) {
     const value = cleanText(word)
-    if (value !== '' && text.includes(value)) {
+    if (value !== '' && containsWakeWord(text, value)) {
       return { level: 'addressed', reason: 'wake-word' }
     }
   }
@@ -89,6 +108,9 @@ export function classifyGroupAddress(input = {}) {
   for (const topic of topics) {
     const value = cleanText(topic)
     if (value === '') continue
+    // MEM-191/MEM-340：短于两个字的 topic 没有区分度（单字连一个 bigram 都凑不出），
+    // 直接不参与话题判断；阈值已从 0.12 提到 0.3，避免双字词碰巧重合就算相关。
+    if (Array.from(value).length < 2) continue
     const related = similarity(text, value)
     if (related >= TOPIC_MIN_SIMILARITY) {
       return { level: 'topic', reason: 'topic-overlap', similarity: Math.round(related * 1000) / 1000 }

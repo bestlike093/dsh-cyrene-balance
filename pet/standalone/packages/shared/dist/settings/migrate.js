@@ -358,7 +358,11 @@ function acceptV2(raw) {
             fontFamily: pickFontFamily(bubble['fontFamily'], base.bubble.fontFamily),
             stickerSize: clampNumber(bubble['stickerSize'], base.bubble.stickerSize, 24, 160),
             background: pickPackRef(bubble['background']),
-            backgroundSlice: pickInt(bubble['backgroundSlice'], base.bubble.backgroundSlice, 4, 64)
+            backgroundSlice: pickInt(bubble['backgroundSlice'], base.bubble.backgroundSlice, 4, 64),
+            /* 停留秒数：台词 3–30，提示 3–60；越界或非法回默认。
+               必须与 DEFAULT_SETTINGS.bubble 的登记配套，否则读取重建时会把它剥掉。 */
+            holdSeconds: Math.round(clampNumber(bubble['holdSeconds'], base.bubble.holdSeconds, 3, 30)),
+            noticeHoldSeconds: Math.round(clampNumber(bubble['noticeHoldSeconds'], base.bubble.noticeHoldSeconds, 3, 60))
         },
         icon: parseIcon(raw['icon'], base.icon),
         sticker: parseSticker(raw['sticker'], base.sticker),
@@ -405,6 +409,8 @@ function acceptV2(raw) {
             custom: isRecord(theme['custom']) ? theme['custom'] : {}
         },
         modules: modules,
+        mail: parseMail(raw['mail']),
+        browse: parseBrowse(raw['browse']),
         defaultEmotion: pickEmotion(raw['defaultEmotion'], base.defaultEmotion),
         // 只接受「目录名」形态：模型 id 会拼进文件路径，斜杠和 .. 一律丢掉。
         live2dModelId: pickModelId(raw['live2dModelId'])
@@ -478,6 +484,42 @@ function parseBalance(raw, base) {
         intervalMinutes: pickInt(value['intervalMinutes'], base.intervalMinutes, 1, 1440)
     };
 }
+/** 邮件：默认收件人 + 桌宠自带 SMTP。授权码原样保留（不 trim、不落日志）。 */
+function parseMail(raw) {
+    const value = isRecord(raw) ? raw : {};
+    const smtp = isRecord(value['smtp']) ? value['smtp'] : {};
+    return {
+        defaultRecipient: typeof value['defaultRecipient'] === 'string'
+            ? value['defaultRecipient'].trim().slice(0, 320)
+            : '',
+        fromName: typeof value['fromName'] === 'string'
+            ? value['fromName'].trim().slice(0, 64)
+            : '昔涟',
+        smtp: {
+            host: pickText(smtp['host'], '').slice(0, 256),
+            port: pickInt(smtp['port'], 465, 1, 65_535),
+            user: typeof smtp['user'] === 'string' ? smtp['user'].trim().slice(0, 320) : '',
+            pass: typeof smtp['pass'] === 'string' ? smtp['pass'].slice(0, 512) : ''
+        }
+    };
+}
+/** 浏览（B站）写操作：白名单去重，投币上限夹到 1..2（B站单次最多 2 币）。 */
+function parseBrowse(raw) {
+    const value = isRecord(raw) ? raw : {};
+    const writes = Array.isArray(value['enabledWrites']) ? value['enabledWrites'] : [];
+    const seen = new Set();
+    const enabledWrites = [];
+    for (const w of writes) {
+        if (typeof w === 'string' && w.length > 0 && w.length <= 32 && !seen.has(w)) {
+            seen.add(w);
+            enabledWrites.push(w);
+        }
+    }
+    return {
+        enabledWrites,
+        maxCoinsPerAction: pickInt(value['maxCoinsPerAction'], 2, 1, 2)
+    };
+}
 /** v1 → v2：字段改名、缺省补全、范围夹取；未知字段原样留在 legacy 里。 */
 function fromV1(raw) {
     const base = DEFAULT_SETTINGS;
@@ -528,6 +570,8 @@ function fromV1(raw) {
         channels: parseChannels(raw['channels'], base.channels),
         theme: { preset: base.theme.preset, custom: {} },
         modules: {},
+        mail: base.mail,
+        browse: base.browse,
         defaultEmotion: base.defaultEmotion,
         live2dModelId: ''
     };

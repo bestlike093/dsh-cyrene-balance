@@ -5,6 +5,59 @@
   --cy-radius-lg: 18px;
 }
 
+/* 她学到的说法：短语做成小药丸，动作按钮贴在右侧。 */
+.speech-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.speech-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 11px;
+  border: 1px solid var(--cy-line, rgba(0, 0, 0, 0.12));
+  border-radius: 999px;
+  background: var(--cy-surface, rgba(255, 255, 255, 0.62));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.speech-chip-text {
+  color: var(--cy-ink);
+}
+
+.speech-chip-count {
+  font-size: 11px;
+  opacity: 0.45;
+}
+
+.speech-chip-action {
+  border: none;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--cy-accent, #d46a8f);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.speech-chip-action:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.speech-chip-action.is-quiet {
+  color: var(--cy-ink-soft, rgba(0, 0, 0, 0.45));
+}
+
+.speech-empty {
+  margin-top: 8px;
+  opacity: 0.6;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -40,13 +93,34 @@ body {
   gap: 14px;
   height: 100%;
   padding: 16px 10px 14px;
-  overflow-y: auto;
+  /* 注意：这里不能用 overflow 滚动。Chromium 会把 overflow 非 visible 的元素
+     整块移出拖动区，导致整个窗口拖不动。导航只有六项，不需要滚动。 */
+  overflow: visible;
   background: linear-gradient(150deg, var(--settings-nav-from), var(--settings-nav-to));
   border-right: 1px solid var(--cy-border);
 }
 
 .s-brand {
   padding: 0 6px;
+  /* 左侧标题区是主要拖动把手；文字本身不吃指针事件。 */
+  -webkit-app-region: drag;
+  cursor: grab;
+}
+
+.s-brand * {
+  pointer-events: none;
+}
+
+/* 聊天页背景：两个按钮并排，窄窗口时自动换行。 */
+.bg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bg-actions .ghost {
+  background: transparent;
 }
 
 .s-title {
@@ -147,6 +221,8 @@ body {
   border-bottom: 1px solid var(--cy-border);
   background: color-mix(in srgb, var(--settings-nav-from) 84%, transparent);
   backdrop-filter: blur(10px);
+  /* 页头就是 frameless 窗口自绘的标题栏，抓这里拖动窗口。 */
+  -webkit-app-region: drag;
 }
 
 .s-pagehead-text {
@@ -172,6 +248,8 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
+  /* 窗口按钮与保存状态必须退出拖动区，否则点不到。 */
+  -webkit-app-region: no-drag;
 }
 
 .s-win-controls {
@@ -622,6 +700,12 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(239, 107, 168, 0.14);
 }
 
+/* 四条轴：开关后面跟一个窄下拉，别把说明文字挤没 */
+.axis-sensitivity {
+  width: 96px;
+  min-width: 96px;
+}
+
 /* ---------- 分段按钮 ---------- */
 
 .seg {
@@ -649,6 +733,22 @@ select:focus {
   background: linear-gradient(140deg, var(--cy-pink), var(--settings-nav-active));
   color: var(--white);
   font-weight: 600;
+}
+
+/* 作用范围：四个选项竖着排。横排时中文标签太宽，会被压成两行字挤在一起。 */
+.seg.seg-col {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 14px;
+}
+
+.seg.seg-col button {
+  text-align: left;
+  padding: 7px 12px;
+  border-radius: 9px;
 }
 
 /* 配色按钮的色点：用 ::before 画，避免动按钮里的文字（data-i18n 会重写 textContent） */
@@ -1331,6 +1431,37 @@ select:focus {
   cursor: default;
 }
 
+/* 本机语音识别：模型路径、脚本位置与安装日志 */
+.asr-path,
+.asr-path-sub {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  word-break: break-all;
+  user-select: text;
+  opacity: 0.78;
+}
+
+.asr-path {
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  opacity: 0.92;
+}
+
+.asr-log {
+  margin: 8px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--cy-line);
+  background: var(--cy-pink-soft);
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* 主动台词：右侧只放一个「试一句」，不抢输入控件的对齐位。 */
 .presence-actions {
   display: flex;
@@ -1826,4 +1957,81 @@ textarea:focus {
 .game-assistant-task .item-text {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* 人格问卷：一题一行，选项贴左；窄窗时不挤成两列 */
+.assessment-q {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--cy-line);
+}
+
+.assessment-q:last-child {
+  border-bottom: none;
+}
+
+.assessment-q-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.assessment-scale {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.assessment-scale button {
+  min-width: 40px;
+  padding: 4px 10px;
+  border: 1px solid var(--cy-line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.assessment-scale button:hover {
+  border-color: rgba(255, 143, 199, 0.55);
+}
+
+.assessment-scale button.active {
+  border-color: rgba(255, 143, 199, 0.9);
+  background: rgba(255, 143, 199, 0.18);
+}
+
+.assessment-result-row {
+  display: grid;
+  grid-template-columns: 5.5em 1fr 4em;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.assessment-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.18);
+  overflow: hidden;
+}
+
+.assessment-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(255, 143, 199, 0.85);
+}
+
+.assessment-result-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.assessment-actions {
+  align-items: center;
 }

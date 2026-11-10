@@ -24,10 +24,12 @@ function asFiniteNumber(value) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-/** 严格校验 YYYY-MM-DD；2 月 30 日这类写法也判非法。 */
+/** 严格校验 YYYY-MM-DD；2 月 30 日这类写法也判非法。年份按四位现实场景要求 >= 100。 */
 function isValidDateKey(key) {
   if (!DATE_KEY.test(key)) return false
   const [year, month, day] = key.split('-').map(Number)
+  // Date.UTC 会把 0-99 当 1900-1999 映射，两位数年份（如 "26-11-01"）会静默变成别的日期。
+  if (year < 100) return false
   const stamp = Date.UTC(year, month - 1, day)
   const check = new Date(stamp)
   return (
@@ -80,16 +82,22 @@ export function isLow(slice, fallbackThreshold = null) {
   const balance = asFiniteNumber(slice?.balance)
   const threshold = asFiniteNumber(slice?.threshold) ?? asFiniteNumber(fallbackThreshold)
   if (balance === null || threshold === null) return false
-  return balance <= threshold
+  // 负数余额属于数据异常（抓取失败常回 -1），不该被当「低额」触发告警。
+  return balance >= 0 && balance <= threshold
 }
 
 /**
  * 是否应该响。
  *
- * ack 为 null/undefined 表示这一段还没响过；只要 ack 已存在就不再响，
- * 不拿余额变化重新开段。ack 的形状由存储层决定，这里只判断存在性。
+ * ack 为 null/undefined 表示这一段还没响过；ack 带 `balance` 快照时，
+ * 只有余额比响铃时刻进一步下降才再响一次——原地不动或回升都不重复打扰。
+ * 旧 ack 没有快照，维持「响过就不再响」的老行为。
  */
 export function shouldAlert(slice, fallbackThreshold = null, ack = null) {
   if (!isLow(slice, fallbackThreshold)) return false
-  return ack === null || ack === undefined
+  if (ack === null || ack === undefined) return true
+  const ackBalance = asFiniteNumber(ack?.balance)
+  const balance = asFiniteNumber(slice?.balance)
+  if (ackBalance !== null && balance !== null) return balance < ackBalance
+  return false
 }

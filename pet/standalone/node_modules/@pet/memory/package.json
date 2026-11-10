@@ -1,0 +1,24 @@
+{
+  "name": "@pet/memory",
+  "version": "2.0.0-dev.0",
+  "type": "module",
+  "description": "跨端记忆层：分层记录、滚动摘要链、墓碑、衰减与 token 预算装配",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@pet/shared": "workspace:*"
+  }
+}

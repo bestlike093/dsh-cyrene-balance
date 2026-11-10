@@ -20,6 +20,13 @@
   </head>
   <body>
     <div id="app">
+      <!-- 头顶透明余量：气泡与提问卡的专属空间。必须独立成段并标 no-drag ——
+           这段要是留在 #app 的拖拽区里，指针从气泡移进这段透明区时 mousemove
+           会被 app-region 吞掉，窗口卡在「可点」状态，透明区就点不过去了。 -->
+      <div id="headroom" aria-hidden="true"></div>
+      <!-- 窗口底图：由 DSH 背景库的「桌宠窗口」槽驱动，铺在最底层。
+           透明窗口里它是唯一的不透明层，没有选图时整层不显示。 -->
+      <div id="bg-layer" aria-hidden="true" data-on="0"></div>
       <div id="banner" hidden></div>
 
       <!-- 立绘区：纵向排布的最后一段。气泡与状态条排在它上方，

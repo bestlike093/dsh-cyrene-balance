@@ -22,7 +22,12 @@ export const DEFAULT_SETTINGS = {
         stickerSize: 64,
         // 空串 = 不加底图，保持纯 CSS 外观。
         background: '',
-        backgroundSlice: 12
+        backgroundSlice: 12,
+        /* 气泡停留秒数：holdSeconds 管台词/余额这类普通气泡，
+           noticeHoldSeconds 管系统提示。sanitizeSettingsPatch 的写入白名单
+           就是从这份默认值表生成的，这里不登记，设置窗保存时会被静默丢弃。 */
+        holdSeconds: 8,
+        noticeHoldSeconds: 10
     },
     icon: { tray: '', app: '' },
     sticker: { source: '', autoApprove: true },
@@ -41,21 +46,32 @@ export const DEFAULT_SETTINGS = {
         localProtocol: 'gpt-sovits',
         // 参考音频要使用者自己指定，空着时本地合成会被跳过而不是报错。
         refAudioPath: '',
+        // GPT-SoVITS 参考音频对应的文字（prompt_text）：空着不提交，音色会差一截。
+        promptText: '',
         promptLang: 'zh',
         cloud: { baseUrl: '', voice: '' },
         volume: 1,
         // 一条气泡话通常几十字，超过就不念了，避免长段独白。
         maxChars: 60,
         // 自动开口之间至少隔 8 秒，防止连续刷屏。
-        minIntervalSeconds: 8
+        minIntervalSeconds: 8,
+        // 「DSH 语音」四个场景，各自独立勾选；全部默认关。
+        // reply 开＝每条回复都念；只勾 wakeWord 时，只在喊语音唤醒词的那一轮念。
+        dshScenes: { reply: false, wakeWord: false, autonomous: false, moments: false },
+        // 语音唤醒词：只管「要不要出声」，和文字唤醒（能不能接话）分开两份。
+        // 留空用内置的语音默认词，不跟顶层的 wakeWords 共用。
+        voiceWakeWords: [],
+        // 旧字段：迁移时读它决定 reply 初值，之后不再写。
+        readDsh: false
     },
     locale: 'zh-CN',
     // 空表示用内置唤醒词，避免默认值散落在 shared 与 electron 两处。
     wakeWords: [],
     companion: {
-        // 记忆、聊天都默认关：不填 Key 不出网，不主动记录。
+        // 记忆默认开：纯本地、加密落盘，不出网也不依赖 Key——
+        // 默认装好就能记住，才算「陪伴」；聊天仍默认关（要 Key 才出网）。
         memory: {
-            enabled: false,
+            enabled: true,
             maxItems: 500,
             summarizeEvery: 8,
             // auto：填了地址走 OpenAI 兼容，没填探本地 Ollama，都不通就纯 BM25。
@@ -102,6 +118,11 @@ export const DEFAULT_SETTINGS = {
     },
     // 余额监控默认关；参数先给保守值，打开模块后才生效。
     balance: { threshold: 20, intervalMinutes: 30 },
+    // 邮件：默认收件人 + 桌宠自带 SMTP（独立于 Cyrene 本体的 app-settings.json）。
+    // smtp.pass 存授权码/密码，明文写在本机 settings.json，与 Cyrene 本体 app-settings.json 做法一致。
+    mail: { defaultRecipient: '', fromName: '昔涟', smtp: { host: '', port: 465, user: '', pass: '' } },
+    // 浏览（B站）：写操作默认全关，需在能力中心逐个开启；单次投币上限 2。
+    browse: { enabledWrites: [], maxCoinsPerAction: 2 },
     showHud: false,
     hudName: '昔涟',
     hudDetail: 'full',

@@ -125,13 +125,15 @@ export function isQuietHour(now, startHour = 23, endHour = 8) {
   return hour >= startHour || hour < endHour
 }
 
-/** 把 '23:00' / '8' 这类写法读成小时；读不出来返回 null，交给默认值。 */
+/** 把 '23:00' / '8' 这类写法读成小时；分钟越界或读不出来返回 null，交给默认值。 */
 function hourOfDay(value) {
   const text = asText(value).trim()
   const match = /^(\d{1,2})(?::(\d{1,2}))?$/.exec(text)
   if (match === null) return null
   const hour = Number(match[1])
   if (!Number.isFinite(hour) || hour < 0 || hour > 23) return null
+  const minute = match[2] === undefined ? 0 : Number(match[2])
+  if (!Number.isFinite(minute) || minute < 0 || minute > 59) return null
   return hour
 }
 
@@ -140,14 +142,15 @@ function hourOfDay(value) {
  *
  * 这一层是接线，不是新策略：
  * getLimits 每次判断时现读，所以改完设置下一句就生效，不用重启。
- * 间隔只允许往保守的方向调——桌面可以 5 分钟一句，群里不行。
+ * 间隔只允许往保守的方向调，但保守下限分通道：
+ * 桌面允许用户设到 5 分钟一句；QQ 侧至少 30 分钟（群里再密就是刷屏）。
  */
-export function proactiveLimitsFromPresence(presence = {}) {
+export function proactiveLimitsFromPresence(presence = {}, options = {}) {
   const limits = {}
 
   const minutes = Number(presence?.intervalMinutes)
   if (Number.isFinite(minutes) && minutes > 0) {
-    const floorMinutes = DEFAULT_PROACTIVE_LIMITS.minGapMs / 60_000
+    const floorMinutes = options.channel === 'qq' ? DEFAULT_PROACTIVE_LIMITS.minGapMs / 60_000 : 1
     limits.minGapMs = Math.max(minutes, floorMinutes) * 60_000
   }
 
@@ -200,9 +203,13 @@ function fragmentsOf(text) {
  */
 export function findTopicHits(text, facts, options = {}) {
   const source = asText(text)
-  const limit = Number.isFinite(options.limit) ? options.limit : DEFAULT_PROACTIVE_LIMITS.maxHits
+  const rawLimit = Number(options.limit)
+  const limit = Number.isFinite(rawLimit) && rawLimit >= 1
+    ? Math.floor(rawLimit)
+    : DEFAULT_PROACTIVE_LIMITS.maxHits
   if (source === '') return []
 
+  const sourceLower = source.toLowerCase()
   const list = Array.isArray(facts) ? facts : []
   const hits = []
   const seen = new Set()
@@ -211,9 +218,11 @@ export function findTopicHits(text, facts, options = {}) {
     const content = typeof fact === 'string' ? fact : asText(fact?.text ?? fact?.content)
     if (content === '') continue
     for (const fragment of fragmentsOf(content)) {
-      if (seen.has(fragment)) continue
-      if (!source.includes(fragment)) continue
-      seen.add(fragment)
+      const key = fragment.toLowerCase()
+      if (seen.has(key)) continue
+      // 大小写不敏感：记忆里的 Rust 与群里的 rust 是同一个话题。
+      if (!sourceLower.includes(key)) continue
+      seen.add(key)
       hits.push({ fragment, fact: content })
       if (hits.length >= limit) return hits
     }
@@ -240,11 +249,14 @@ export function evaluateSilence(options = {}) {
   if (lastUserSpokeAt > 0) {
     const pending = sent.filter((at) => at > lastUserSpokeAt)
     if (pending.length === 0) return null
-    if (now - lastUserSpokeAt < limits.giveUpAfterMs) return null
+    // 止损窗口从「第一条没被接住的开口」起算，不从对方上次说话起算：
+    // 对方三个月前说过一句、我昨天才开始主动，不该第一次就被判死。
+    const anchor = Math.min(...pending)
+    if (now - anchor < limits.giveUpAfterMs) return null
     return {
       silenced: true,
       reason: 'silent_giveup',
-      since: lastUserSpokeAt,
+      since: anchor,
       sentCount: pending.length,
       cold: false
     }
@@ -273,6 +285,14 @@ function preflight(options = {}) {
   const lastSpokeAt = asNumber(options.lastSpokeAt, 0)
   const todayCount = asNumber(options.todayCount, 0)
 
+  // 配置先过一遍合法性：负数 / 0 / NaN 一律按默认处理，不静默改变行为。
+  const rawDaily = Number(limits.dailyLimit)
+  const dailyLimit = Number.isFinite(rawDaily) && rawDaily > 0
+    ? Math.floor(rawDaily)
+    : DEFAULT_PROACTIVE_LIMITS.dailyLimit
+  const rawGap = Number(limits.minGapMs)
+  const minGapMs = Number.isFinite(rawGap) && rawGap >= 0 ? rawGap : DEFAULT_PROACTIVE_LIMITS.minGapMs
+
   // 止损排在静默与额度之前：已经决定不说了，就不该再消耗额度。
   const silence = evaluateSilence({
     now,
@@ -285,10 +305,10 @@ function preflight(options = {}) {
   if (isQuietHour(now, limits.quietStartHour, limits.quietEndHour)) {
     return { speak: false, reason: 'quiet_hours', hits: [] }
   }
-  if (todayCount >= limits.dailyLimit) {
+  if (todayCount >= dailyLimit) {
     return { speak: false, reason: 'daily_limit', hits: [] }
   }
-  if (lastSpokeAt > 0 && now - lastSpokeAt < limits.minGapMs) {
+  if (lastSpokeAt > 0 && now - lastSpokeAt < minGapMs) {
     return { speak: false, reason: 'cooldown', hits: [] }
   }
   return null
@@ -510,6 +530,8 @@ export function pendingOpenLoopReviews(options = {}) {
       ageMs
     })
   }
+  // 最老的在最前：先问起的先复核，不给「数组顺序」留偶然性。
+  pending.sort((a, b) => a.at - b.at)
   return pending
 }
 
@@ -517,8 +539,11 @@ export function pendingOpenLoopReviews(options = {}) {
 export function buildCloserNote(decision) {
   if (decision?.speak !== true || decision.reason !== 'closing') return ''
   const round = asNumber(decision.index, 1)
+  const total = asNumber(decision.total, DEFAULT_SILENCE_LIMITS.maxClosers)
+  // 只有真的到最后一轮才说「最后一次」：maxClosers 默认 3，
+  // 第 2 次收场说成「最后一次」会让模型提前收束，和账本状态对不上。
   const tail =
-    round > 1 ? '这是最后一次收尾，之后就别再提这件事了。' : '说完就翻篇，之后不再提。'
+    round >= total ? '这是最后一次收尾，之后就别再提这件事了。' : '说完就翻篇，之后不再提。'
   return (
     '你上一条主动说的话，一直没人接。' +
     '这一句只把话轻轻放下，一句话就够：可以说自己要去忙别的了、要睡了，或者把刚才的话题收个尾。' +
@@ -546,16 +571,19 @@ export function pickCloserLine(index = 1) {
   return CLOSER_LINES[(safe - 1) % CLOSER_LINES.length]
 }
 
-/** 话头复核的分寸：交给这一轮一起判断，不要单独追一条。 */
+/** 话头复核的分寸：交给这一轮一起判断，不要单独追一条。最多带两条，别把复核变成清单。 */
 export function buildReviewNote(loops) {
-  const list = Array.isArray(loops) ? loops.filter((item) => asText(item?.question) !== '') : []
+  const list = Array.isArray(loops)
+    ? loops.filter((item) => asText(item?.question) !== '').slice(0, 2)
+    : []
   if (list.length === 0) return ''
-  const first = list[0]
+  const questions = list.map((item) => `「${asText(item.question)}」`).join('、')
+  const extra = list.length > 1 ? '（另外还有一条，都还没有结论）' : ''
   return (
-    `之前你问过「${first.question}」，到现在还没有结论。` +
+    `之前你问过${questions}，到现在还没有结论。` +
     '这一轮如果对方的回复里已经带了答案，就当作聊完了，自然接住，不要再问一遍；' +
     '如果对方绕开了，也先不追，等他自己提起。' +
-    '不要说「上次我问你」这种话。'
+    `不要说「上次我问你」这种话。${extra}`
   )
 }
 
@@ -724,6 +752,25 @@ export function createProactiveGate(options = {}) {
       }
     },
     /**
+     * 用户戳出来的那一句：她确实开口了，但这不算「主动搭话」。
+     *
+     * 只记冷却与去重池，不涨每日额度、不进未回应队列。
+     * 直接套 markSpoke 有两个副作用：用户点几下就把当天的主动开口额度吃光；
+     * 还会被记成「说了没人理」，攒够了触发收场，她自己把话头收掉 ——
+     * 而用户明明正在互动。
+     */
+    markSpokeOnDemand(scope, line = '') {
+      const current = read(scope)
+      const stamp = now()
+      current.lastSpokeAt = stamp
+      const text = normalizeLine(line)
+      if (text !== '') {
+        const kept = pruneSpoken(stamp)
+        kept.push({ scope: asText(scope), text, at: stamp })
+        spoken = kept.length > dedupe.maxEntries ? kept.slice(-dedupe.maxEntries) : kept
+      }
+    },
+    /**
      * 这句话在别的会话里是不是刚说过。
      *
      * 只看跨会话：同一个群里前后重复，由 decide 的冷却与话头复核管，
@@ -754,6 +801,25 @@ export function createProactiveGate(options = {}) {
       current.lastUserSpokeAt = now()
       current.unansweredSentAt = []
       current.closerCount = 0
+    },
+    /** 只读「发出去没人接」的账，给调用方在清账前留快照；失败时用 restoreSilence 还回去。 */
+    peekSilence(scope) {
+      const current = read(scope)
+      return {
+        lastUserSpokeAt: current.lastUserSpokeAt,
+        unansweredSentAt: [...current.unansweredSentAt],
+        closerCount: current.closerCount
+      }
+    },
+    /** 这一轮模型没回成：把清掉的止损账原样还回去，下一次主动开口仍会被收敛。 */
+    restoreSilence(scope, snapshot) {
+      if (snapshot === null || typeof snapshot !== 'object') return
+      const current = read(scope)
+      current.lastUserSpokeAt = asNumber(snapshot.lastUserSpokeAt, current.lastUserSpokeAt)
+      current.unansweredSentAt = Array.isArray(snapshot.unansweredSentAt)
+        ? snapshot.unansweredSentAt.map((item) => asNumber(item, 0)).filter((item) => item > 0)
+        : []
+      current.closerCount = asNumber(snapshot.closerCount, 0)
     },
     /** 主动问出去的话头，记一笔，等对方回来时复核。 */
     noteOpened(scope, input = {}) {

@@ -6,7 +6,7 @@
 
 - 仓库：`bestlike093/cyrene-balance`
 - 版本：commit `c54d9f67b1f41f6f2a383db86d0c4f2ae10d487e`（main）
-- 作者：旅人（自绘 / 自制）
+- 作者：bestlike093（自绘 / 自制）
 - 生成方式：`scripts/prepare-cyrene-assets.ps1` 从本地 `cyrene-balance-*.zip` 解包后压缩
 - 原始 zip 不入库；仓库内只保留压缩后的运行时副本
 
@@ -31,6 +31,6 @@
 
 ## 使用边界
 
-- 旅人本人已确认 `cyrene-balance` 是其自有仓库，本目录素材可由本项目自由使用、修改并随包分发。
-- 素材本身不单独售卖；向本项目之外的第三方再分发时，仍以旅人的说明为准。
+- `bestlike093` 已确认 `cyrene-balance` 是其自有仓库，本目录素材可由本项目自由使用、修改并随包分发。
+- 素材本身不单独售卖；向本项目之外的第三方再分发时，仍以原作者的说明为准。
 - 用户自行导入的模型与素材仍走 `userData/models`，优先级高于本目录，不会被这里覆盖。

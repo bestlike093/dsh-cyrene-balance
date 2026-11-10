@@ -9,8 +9,9 @@
  */
 
 import { buildCompanionNote, parseEmojiTag } from './companion.mjs'
-import { buildSocialNote, detectLanguagePlay, matchWake } from './social.mjs'
+import { buildSocialNote, buildPlayHint, detectLanguagePlay, matchWake } from './social.mjs'
 import { fixMisattributedQuote, guardReply, shouldStaySilent } from './reply-guard.mjs'
+import { cleanVoice } from './voice-guard.mjs'
 
 /**
  * 摘出 [[表情:标签]]，只取第一个。
@@ -31,6 +32,160 @@ function parseStickerTag(text) {
 
 const CHAT_ENDPOINT = 'https://api.deepseek.com/chat/completions'
 const CHAT_TIMEOUT_MS = 45_000
+
+/** 工具循环最多打几轮模型（一轮 = 一次请求 + 一次工具执行）。防止死循环。 */
+const MAX_TOOL_ROUNDS = 4
+
+/** 单次工具结果回填给模型的最大字符数。字幕全文等长结果在这里截断，避免撑爆上下文。 */
+const TOOL_RESULT_CHAR_BUDGET = 6_000
+
+/** 一整轮对话里工具结果回填的累计字符上限。多轮工具循环时逐轮累加，到顶后不再执行新工具。 */
+const TOOL_ROUND_CHAR_BUDGET = 40_000
+
+/**
+ * 给模型的工具清单（OpenAI / DeepSeek 兼容的 function calling 格式）。
+ *
+ * 全部是「能力描述」：模型据此决定要不要调用、传什么参数。
+ * 真正的执行在 main.mjs 的 runTool 里，本模块不碰网络 / 窗口 / 文件。
+ * `bili_write` 刻意不暴露 confirmed 字段——危险动作的二次确认由主进程完成，模型伪造不了。
+ */
+const TOOL_DEFINITIONS = [
+  {
+    type: 'function',
+    function: {
+      name: 'bili_search',
+      description:
+        '在哔哩哔哩搜索视频，返回匹配的视频列表（含 bvid、标题、UP 主、时长、简介等）。对方想找某个主题的视频时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: { type: 'string', description: '搜索关键词' }
+        },
+        required: ['keyword']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'bili_video_info',
+      description:
+        '读取某个 B 站视频的详情，返回简介和分 P 列表（含每 P 的 cid）。拿到 bvid 后、想读字幕前，先用它取 cid。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: '视频的 bvid，形如 BV1xx411c7mD' }
+        },
+        required: ['bvid']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'bili_subtitle_list',
+      description: '列出某个视频（bvid + cid）可用的字幕轨，返回每条字幕的下载地址。需要登录态才有 AI 字幕。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: '视频 bvid' },
+          cid: { type: 'string', description: '分 P 的 cid，来自 bili_video_info' }
+        },
+        required: ['bvid', 'cid']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'bili_transcript',
+      description: '下载并拼出某条字幕的全文。subtitleUrl 来自 bili_subtitle_list。',
+      parameters: {
+        type: 'object',
+        properties: {
+          subtitleUrl: { type: 'string', description: '字幕下载地址，来自 bili_subtitle_list' }
+        },
+        required: ['subtitleUrl']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'bili_article',
+      description: '抓取一个网页的正文（专栏文章等），返回清洗后的正文文本。',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: '完整 http(s) 地址' }
+        },
+        required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'bili_write',
+      description:
+        '在 B 站执行一个互动动作：点赞(like)、评论(comment)、投币(coin)、转发(share)、收藏(favorite)。这些是写操作，默认关闭，且危险动作需要对方确认后才能执行；不确定对方是否同意时，先问对方，不要直接调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['like', 'comment', 'coin', 'share', 'favorite'],
+            description: '要执行的互动动作'
+          },
+          bvid: { type: 'string', description: '目标视频的 bvid' },
+          message: { type: 'string', description: '评论内容，仅 action=comment 时必填' },
+          coinCount: { type: 'integer', description: '投币数量，仅 action=coin 时，1~2，默认 1' }
+        },
+        required: ['action', 'bvid']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memory_add_facts',
+      description:
+        '把学到的知识或判断教训写进长期记忆，下次能想起来。学到有价值的知识用 kind=knowledge；被对方纠正、或自己判断错了、或踩过的坑用 kind=lesson。只在确实值得长期记住时使用，别随手写。',
+      parameters: {
+        type: 'object',
+        properties: {
+          facts: {
+            type: 'array',
+            description: '要记住的条目',
+            items: {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: ['knowledge', 'lesson'], description: 'knowledge=学到的知识；lesson=纠正过/别重犯的教训' },
+                text: { type: 'string', description: '一条完整的事实或教训' },
+                source: { type: 'string', description: '来源，可选' },
+                confidence: { type: 'number', description: '0~1 置信度，可选' }
+              },
+              required: ['kind', 'text']
+            }
+          }
+        },
+        required: ['facts']
+      }
+    }
+  }
+]
+
+/**
+ * 启用工具时追加到 system 的一段使用原则。只在真正挂上 runTool 时拼进去，
+ * 纯文本模式不出现，避免模型对着不存在的工具空想。
+ */
+const TOOL_USAGE_NOTE = [
+  '你可以调用工具查 B 站、读字幕、写记忆。原则：',
+  '- 普通聊天不需要工具，别为了用而用。',
+  '- 查资料、找视频、读内容时，用只读工具直接做。',
+  '- 写操作（点赞 / 投币 / 评论 / 转发 / 收藏）默认关，危险动作要等对方确认；拿不准对方同不同意，先问，别擅自做。',
+  '- 学到有价值的知识、被纠正过、或踩过坑，用 memory_add_facts 沉淀成记忆，下次能想起来。'
+].join('\n')
 
 /** 单条消息长度上限：防止一次粘贴把上下文撑爆。 */
 const MAX_MESSAGE_CHARS = 4_000
@@ -71,7 +226,9 @@ function scopeOf(source) {
   if (source === null || typeof source !== 'object') return 'desktop'
   if (typeof source.channel !== 'string' || source.channel === '') return 'desktop'
   if (source.channel !== 'qq') return 'desktop'
-  const chatType = source.chatType === 'group' ? 'group' : 'private'
+  // 只认 group / private；拼错或缺失的 chatType 归 unknown，不跟真私聊混桶。
+  const chatType =
+    source.chatType === 'group' ? 'group' : source.chatType === 'private' ? 'private' : 'unknown'
   const openId = typeof source.openId === 'string' ? source.openId.trim() : ''
   return openId === '' ? `qq:${chatType}` : `qq:${chatType}:${openId}`
 }
@@ -148,8 +305,20 @@ export const SYSTEM_SECTION_BUDGETS = {
   body: 200,
   // 贴近时刻的分寸：比身体感觉长一点，但只在这一轮真的允许靠近时才出现。
   intimacy: 420,
-  sticker: 300
+  sticker: 300,
+  // 这一句的谐音/黑话提示：当轮特有，字数很少。
+  play: 160
 }
+
+/**
+ * turn 槽的总预算。
+ *
+ * 单项预算只保证「一段别吃光」，总预算保证「全部加起来别吃光」。
+ * 超了总预算时按 SHRINK_ORDER 从最不重要的段开始逐级收缩，
+ * 每级砍到六成（下限 60 字）；memory / fact 是最后才动的。
+ */
+export const TOTAL_TURN_BUDGET = 2_400
+const SHRINK_ORDER = ['play', 'sticker', 'proactive', 'intimacy', 'review', 'body', 'affinity', 'companion', 'fact', 'memory']
 
 /** 按 Unicode 码点裁，避免把表情或代理对劈成半个字符。 */
 export function clampSection(text, budget) {
@@ -202,7 +371,8 @@ function buildPromptSections({
   proactiveNote = '',
   reviewNote = '',
   bodyNote = '',
-  intimacyNote = ''
+  intimacyNote = '',
+  playHint = ''
 }) {
   const persona =
     typeof personaText === 'string' && personaText.trim() !== ''
@@ -216,57 +386,92 @@ function buildPromptSections({
     stable.push('', source)
   }
   // 社交语感也属于稳定前缀：这群人怎么说话，不会因为这一句而改变。
+  // 当轮的谐音/黑话提示不在这里，它单独走 turn 槽（play）。
   const social = clampSection(socialNote, SYSTEM_SECTION_BUDGETS.social)
   if (social !== '') {
     stable.push('', social)
   }
 
+  // turn 各段的原始文本与预算；总预算超了按优先级从 play / sticker 开始收缩。
+  const budgets = { ...SYSTEM_SECTION_BUDGETS }
+  const raw = {
+    memory: memoryText,
+    fact: factNote,
+    companion: companionNote,
+    affinity: affinityNote,
+    review: reviewNote,
+    body:
+      typeof bodyNote === 'string' && bodyNote.trim() !== ''
+        ? `你此刻的身体感觉：${bodyNote.trim()}。`
+        : '',
+    intimacy: intimacyNote,
+    proactive: proactiveNote,
+    sticker: stickerHint,
+    play: playHint
+  }
+
+  const fit = () => {
+    const sections = {}
+    for (const [key, text] of Object.entries(raw)) {
+      const text2 = typeof text === 'string' ? text.trim() : ''
+      if (text2 === '') continue
+      const budget = budgets[key]
+      const cut = clampSection(text2, budget)
+      if (cut !== '') sections[key] = cut
+    }
+    const total = Object.values(sections).reduce((sum, item) => sum + Array.from(item).length, 0)
+    return { sections, total }
+  }
+
+  let { sections, total } = fit()
+  // 总预算兜底：超了先砍最不重要的段，每级缩到六成；砍到只剩 memory/fact 时停手。
+  for (const key of SHRINK_ORDER) {
+    if (total <= TOTAL_TURN_BUDGET) break
+    if (sections[key] === undefined) continue
+    const next = Math.max(60, Math.floor(budgets[key] * 0.6))
+    if (next >= budgets[key]) continue
+    budgets[key] = next
+    ;({ sections, total } = fit())
+  }
+
   const turn = []
-  const memory = clampSection(memoryText, SYSTEM_SECTION_BUDGETS.memory)
-  if (memory !== '') {
+  if (sections.memory !== undefined) {
     turn.push('下面是你记得的早前对话。只在和当前话题相关时自然用上，不要逐条复述：')
-    turn.push(memory)
+    turn.push(sections.memory)
   }
   // 结构化事实放在长期记忆之后：先有原文摘要，再有整理过的偏好/人物/项目/约定。
-  const fact = clampSection(factNote, SYSTEM_SECTION_BUDGETS.fact)
-  if (fact !== '') {
-    turn.push('', '你还记得这些（不用逐条提，合适的时候自然用上）：', fact)
+  if (sections.fact !== undefined) {
+    turn.push('', '你还记得这些（不用逐条提，合适的时候自然用上）：', sections.fact)
   }
-  const companion = clampSection(companionNote, SYSTEM_SECTION_BUDGETS.companion)
-  if (companion !== '') {
-    turn.push('', companion)
+  if (sections.companion !== undefined) {
+    turn.push('', sections.companion)
   }
   // 关系状态放在心情之后：越靠后越像「此刻」，但不抢人格的位置。
-  const affinity = clampSection(affinityNote, SYSTEM_SECTION_BUDGETS.affinity)
-  if (affinity !== '') {
-    turn.push('', affinity)
+  if (sections.affinity !== undefined) {
+    turn.push('', sections.affinity)
   }
   // 未结论的话头：告诉模型「这件事问过，别机械地再问一遍」。
-  const review = clampSection(reviewNote, SYSTEM_SECTION_BUDGETS.review)
-  if (review !== '') {
-    turn.push('', review)
+  if (sections.review !== undefined) {
+    turn.push('', sections.review)
   }
   // 身体感觉紧跟话头：它影响的是这一轮的语气与句子长短，不该被当成资料。
-  const body = clampSection(
-    typeof bodyNote === 'string' && bodyNote.trim() !== '' ? `你此刻的身体感觉：${bodyNote.trim()}。` : '',
-    SYSTEM_SECTION_BUDGETS.body
-  )
-  if (body !== '') {
-    turn.push('', body)
+  if (sections.body !== undefined) {
+    turn.push('', sections.body)
   }
   // 贴近时刻的分寸：只在开关打开、场景允许、并由上层判断「这一轮可以靠近」时才有内容。
-  const intimacy = clampSection(intimacyNote, SYSTEM_SECTION_BUDGETS.intimacy)
-  if (intimacy !== '') {
-    turn.push('', intimacy)
+  if (sections.intimacy !== undefined) {
+    turn.push('', sections.intimacy)
   }
   // 主动开口的分寸放在最后：这一轮不是在回应她，别把话说满。
-  const proactive = clampSection(proactiveNote, SYSTEM_SECTION_BUDGETS.proactive)
-  if (proactive !== '') {
-    turn.push('', proactive)
+  if (sections.proactive !== undefined) {
+    turn.push('', sections.proactive)
   }
-  const sticker = clampSection(stickerHint, SYSTEM_SECTION_BUDGETS.sticker)
-  if (sticker !== '') {
-    turn.push('', sticker)
+  if (sections.sticker !== undefined) {
+    turn.push('', sections.sticker)
+  }
+  // 这一句的谐音/黑话提示垫底：最短、最当轮。
+  if (sections.play !== undefined) {
+    turn.push('', sections.play)
   }
   return { stable: stable.join('\n'), turn: turn.join('\n').trim() }
 }
@@ -276,39 +481,12 @@ export function composePromptSlots(input = {}) {
   return buildPromptSections(input)
 }
 
-/** 兼容旧调用：拼成一份完整的 system 文本。 */
-export function composeSystemPrompt(
-  personaText,
-  memoryText,
-  companionNote = '',
-  stickerHint = '',
-  affinityNote = '',
-  factNote = '',
-  sourceNoteText = '',
-  socialNote = '',
-  proactiveNote = '',
-  reviewNote = '',
-  bodyNote = ''
-) {
-  const { stable, turn } = buildPromptSections({
-    personaText,
-    memoryText,
-    companionNote,
-    stickerHint,
-    affinityNote,
-    factNote,
-    sourceNoteText,
-    socialNote,
-    proactiveNote,
-    reviewNote,
-    bodyNote
-  })
-  return turn === '' ? stable : `${stable}\n\n${turn}`
-}
-
 /**
  * 历史裁剪：按轮保留，最近的在后面。role 只允许 user / assistant。
  * 每条 user 带上它原来的来源标记，重启后也不会把 QQ 的话当成桌面说的。
+ *
+ * 只保留完整的「user → assistant」对：缺回复的 user、开头的 assistant、
+ * 乱序的单独条目都跳过，绝不把顺序颠倒的一轮塞给模型。
  */
 function trimTurns(turns, maxTurns) {
   const limit = Number.isFinite(maxTurns) && maxTurns > 0 ? Math.floor(maxTurns) : 10
@@ -321,12 +499,16 @@ function trimTurns(turns, maxTurns) {
   // 从最近往回按「一问一答」整轮累加，超预算就停。
   const kept = []
   let used = 0
-  for (let i = window.length - 1; i >= 0; i -= 2) {
-    const pair = window.slice(Math.max(0, i - 1), i + 1)
-    const size = pair.reduce((sum, item) => sum + String(item.content ?? '').length, 0)
+  for (let i = window.length - 1; i >= 1; i -= 1) {
+    const item = window[i]
+    if (item.role !== 'assistant') continue
+    const user = window[i - 1]
+    if (user.role !== 'user') continue
+    const size = String(user.content ?? '').length + String(item.content ?? '').length
     if (kept.length > 0 && used + size > HISTORY_CHAR_BUDGET) break
-    kept.unshift(...pair)
+    kept.unshift(user, item)
     used += size
+    i -= 1
   }
   return kept
 }
@@ -373,7 +555,13 @@ export function createChatService(options) {
     persistTurn,
     persistClear,
     fetchImpl,
-    log
+    log,
+    // 工具执行器：可选注入。没注入时聊天按旧路径走，请求不带 tools，模型也不会调工具。
+    // 签名：runTool(name, args, ctx) -> 结果对象；ctx 含 source / scope / confirmed。
+    runTool = null,
+    // 危险动作的二次确认：可选注入。runTool 返回 needsConfirm 时调用，等用户选择。
+    // 签名：requestConfirm(info) -> Promise<{ allowed: boolean }>。
+    requestConfirm = null
   } = options
   const fetchJson = fetchImpl ?? globalThis.fetch
 
@@ -384,9 +572,22 @@ export function createChatService(options) {
    * 现在读写都按同一把 key 走，桶与桶之间不共享任何一条 turn。
    */
   const buckets = new Map()
-  let busy = false
+  // 同一时刻只允许一轮模型请求：陪伴层是单例，跨轮并行会互相污染心情与话头。
+  // 检查和占位之间没有任何 await，原子成立；后来的请求排队等一小会儿而不是被直接丢掉。
+  let busyScope = null
   // 上一次真正由用户开口的窗口；只在换窗口时通知一次，不在每次发消息都触发。
   let activeScope = null
+
+  /** 排队等上一个请求让位，最长 20 秒；单线程里检查与占位之间无 await，天然互斥。 */
+  async function acquireBusy(scope) {
+    const deadline = Date.now() + 20_000
+    while (busyScope !== null) {
+      if (Date.now() >= deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+    busyScope = scope
+    return true
+  }
 
   function bucketFor(scope) {
     const key = typeof scope === 'string' && scope !== '' ? scope : 'desktop'
@@ -413,7 +614,6 @@ export function createChatService(options) {
    */
   function hydrate(list) {
     if (!Array.isArray(list) || list.length === 0) return 0
-    if (totalTurns() > 0) return 0
     // 与运行时窗口同一口径：重启后看到的历史长度不会突然缩水。
     const keep = Math.max(chatConfig().historyLimit * 2, 10)
     const restored = new Map()
@@ -443,6 +643,9 @@ export function createChatService(options) {
 
     let count = 0
     for (const [scope, bucket] of restored) {
+      // 已有内存会话的桶保持原样；只有空桶才从磁盘接回，
+      // 一个先被写入的会话不再挡住其他会话恢复历史。
+      if ((buckets.get(scope)?.length ?? 0) > 0) continue
       // 每个会话各自保留最近若干条；一个群刷屏不会把桌面的历史挤掉。
       const capped = bucket.slice(-Math.min(MAX_RESTORED_TURNS, keep))
       if (capped.length > 0) buckets.set(scope, capped)
@@ -476,26 +679,90 @@ export function createChatService(options) {
     }
   }
 
+  /** 把工具结果序列化成模型能读的文本，超长截断。 */
+  function stringifyToolResult(value) {
+    let text
+    try {
+      text = JSON.stringify(value)
+    } catch {
+      text = String(value)
+    }
+    if (typeof text !== 'string') text = String(text)
+    if (text.length > TOOL_RESULT_CHAR_BUDGET) {
+      text = `${text.slice(0, TOOL_RESULT_CHAR_BUDGET)}…（结果过长已截断）`
+    }
+    return text
+  }
+
+  /**
+   * 执行一次工具调用。
+   *
+   * 只读工具直接返回结果；写操作返回 needsConfirm 时，交给注入的 requestConfirm
+   * 等用户拍板，允许后再带 confirmed 重跑一次。confirmed 只在这里由主进程设置，
+   * 模型传不进 confirmed，伪造不了确认。
+   */
+  async function executeToolCall(toolCall, ctx) {
+    const fn = toolCall?.function
+    const name = typeof fn?.name === 'string' ? fn.name : ''
+    let args = {}
+    try {
+      args = JSON.parse(typeof fn?.arguments === 'string' ? fn.arguments : '{}')
+    } catch {
+      args = {}
+    }
+    if (typeof runTool !== 'function') {
+      return JSON.stringify({ ok: false, error: '工具不可用' })
+    }
+    try {
+      const first = await runTool(name, args, ctx)
+      if (first && first.needsConfirm === true) {
+        if (typeof requestConfirm !== 'function') {
+          return JSON.stringify({ ok: false, needsConfirm: true, message: '这个动作需要确认，但当前环境不支持' })
+        }
+        // 固定字段放在展开之后：确认信息里的 name/args 不能覆盖真实执行参数。
+        const decision = await requestConfirm({ ...first, name, args })
+        if (decision?.allowed !== true) {
+          return JSON.stringify({ ok: false, rejected: true, message: '对方没有同意这个动作，不要擅自执行' })
+        }
+        const second = await runTool(name, args, { ...ctx, confirmed: true })
+        // 确认后仍然要求再确认：不再循环，明确拒绝，避免被「还需要确认」拖进死循环。
+        if (second && second.needsConfirm === true) {
+          return JSON.stringify({ ok: false, needsConfirm: true, message: '动作仍需额外确认，本轮放弃执行' })
+        }
+        return stringifyToolResult(second)
+      }
+      return stringifyToolResult(first)
+    } catch (error) {
+      return JSON.stringify({ ok: false, error: error?.message ?? String(error) })
+    }
+  }
+
   async function send(payload) {
     const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
     if (text.length === 0) return { ok: false, reason: 'empty' }
     if (text.length > MAX_MESSAGE_CHARS) return { ok: false, reason: 'too-long' }
 
+    // 来源是结构信息：桌面没有 source，QQ 网关会带上 chatType / openId。
+    const source =
+      payload?.source !== null && typeof payload?.source === 'object' ? payload.source : null
+
     // 主动开口：这一轮不是在回应她，而是一句「自己走进来」的话。
     // 结构由上层判定，这里只负责换一种说法方式，不放宽任何权限。
     const proactive =
       payload?.proactive !== null && typeof payload?.proactive === 'object' ? payload.proactive : null
+    // 群主动开口的说话人：优先用上层给的 speaker；没给就从 source 里的发送者推一个稳定代号。
     const proactiveSpeaker =
-      typeof proactive?.speaker === 'string' && proactive.speaker.trim() !== ''
-        ? proactive.speaker.trim().slice(0, 24)
-        : '有人'
+      (
+        typeof proactive?.speaker === 'string' && proactive.speaker.trim() !== ''
+          ? proactive.speaker.trim()
+          : typeof source?.senderOpenId === 'string' && source.senderOpenId.trim() !== ''
+            ? `群友·${source.senderOpenId.replace(/[^0-9a-zA-Z]/g, '').slice(-4).toLowerCase()}`
+            : '有人'
+      ).slice(0, 24)
     // 未结论的话头：单独一段，不改变这一轮「是在回应对方」的语义。
     const reviewNote =
       typeof payload?.reviewNote === 'string' ? payload.reviewNote.trim() : ''
 
-    // 来源是结构信息：桌面没有 source，QQ 网关会带上 chatType / openId。
-    const source =
-      payload?.source !== null && typeof payload?.source === 'object' ? payload.source : null
     const scope = scopeOf(source)
     // 这一轮只读自己这个会话的桶：别的群、别的私聊、桌面都不参与上下文。
     const historyTurns = bucketFor(scope)
@@ -506,7 +773,12 @@ export function createChatService(options) {
     if (config.provider !== SUPPORTED_PROVIDER) {
       return { ok: false, reason: 'unsupported-provider', message: config.provider }
     }
-    if (busy) return { ok: false, reason: 'busy' }
+    // 排队等上一轮让位：检查与占位之间没有任何 await，互斥真正成立；
+    // 实在等不到（上一轮异常长）才拒绝，不会再把后来的请求直接丢掉。
+    if (!(await acquireBusy(scope))) {
+      return { ok: false, reason: 'busy' }
+    }
+    try {
 
     // 频率守门：短时间内被反复触发时不再打出去，避免 429 与重复花钱。
     // 放在其他副作用之前：这一轮根本没发出去，不该先动额度或节目单。
@@ -580,8 +852,11 @@ export function createChatService(options) {
     const personaText = typeof getPersonaText === 'function' ? getPersonaText(settings) : ''
     // 记忆摘要也按 scope 取：群里听来的事不该出现在桌面的提示词里。
     // 允许注入方做异步检索（向量重排）；同步实现 await 一样成立。
+    // 和其余六项注入一样带超时兜底：BM25 / 向量检索卡住时不能把整轮悬挂在这里。
     const memoryText =
-      typeof getMemoryDigest === 'function' ? await getMemoryDigest(text, scope) : ''
+      typeof getMemoryDigest === 'function'
+        ? String((await withTimeout(() => getMemoryDigest(text, scope), '')) ?? '')
+        : ''
 
     // 收尾沉默：上一轮已经道过晚安，这一轮对方也只是道别，就不再追一句。
     // 只在 QQ 上生效——桌面窗口收到空回复会留下一个空气泡。
@@ -634,7 +909,7 @@ export function createChatService(options) {
           ''
         ),
         withTimeout(
-          () => (typeof getFactNote === 'function' ? getFactNote(spoken, scope) : ''),
+          () => (typeof getFactNote === 'function' ? getFactNote(spoken, scope, source) : ''),
           ''
         ),
         withTimeout(
@@ -660,13 +935,13 @@ export function createChatService(options) {
         )
       ])
 
-    // 额外陪伴提示只给用户主动开口的这一轮：主动搭话有自己的气泡路径，
-    // 不该在群里说「本来在做什么，现在陪你」。
+    // 额外陪伴提示（日程打断、跨窗口承接、穿搭等）：内容由上层按 scope 过滤，
+    // 拿不到或该场景不该给时上层返回空串；这里不再用 proactive 挡门。
     let extraCompanionNote = ''
-    if (proactive === null && typeof getCompanionExtra === 'function') {
+    if (typeof getCompanionExtra === 'function') {
       extraCompanionNote = String(
         (await withTimeout(
-          () => getCompanionExtra({ text: spoken, scope, source }),
+          () => getCompanionExtra({ text: spoken, scope, source, proactive: proactive !== null }),
           '',
           500
         )) ?? ''
@@ -681,17 +956,20 @@ export function createChatService(options) {
     const factNote = String(factRaw ?? '')
     const bodyNote = String(bodyRaw ?? '')
     const intimacyNote = String(intimacyRaw ?? '')
-    // 社交语感：本地先判断这句话有没有谐音/黑话/梗，再让上层补群聊画像与梗库。
-    // 任何一步失败都不影响回复，宁可少一段提示。
+    // 社交语感：稳定前缀只放「这群人怎么说话」（scope + 群像 + 梗库），
+    // 这一句的谐音/黑话提示单独进 turn 槽，稳定段不再随句变化。
     let socialNote = ''
+    let playHint = ''
     try {
-      socialNote = buildSocialNote({ scope: scopeKind, play })
+      socialNote = buildSocialNote({ scope: scopeKind })
+      playHint = buildPlayHint(play)
       const extra = String(socialExtraRaw ?? '').trim()
       if (extra !== '') {
         socialNote = socialNote === '' ? extra : `${socialNote}\n${extra}`
       }
     } catch {
       socialNote = ''
+      playHint = ''
     }
     const sourceHint = sourceNote(source)
     const emojiCandidates = Array.isArray(turn?.emoji)
@@ -745,16 +1023,19 @@ export function createChatService(options) {
       proactiveNote: typeof proactive?.note === 'string' ? proactive.note : '',
       reviewNote,
       bodyNote,
-      intimacyNote
+      intimacyNote,
+      playHint
     })
     const spokenLine =
       proactive === null
         ? wireContent(spoken, source)
         : `［群里 ${proactiveSpeaker} 说。这不是对你说的，你只是听见了］${spoken}`
-    const messages = [
+    // 工具只在注入 runTool 时挂上：没注入就走纯文本旧路径，模型也不会调工具。
+    const hasTools = typeof runTool === 'function'
+    const roundMessages = [
       {
         role: 'system',
-        content: slots.stable
+        content: hasTools ? `${slots.stable}\n\n${TOOL_USAGE_NOTE}` : slots.stable
       },
       ...trimTurns(historyTurns, config.historyLimit),
       {
@@ -766,44 +1047,90 @@ export function createChatService(options) {
       }
     ]
 
-    const controller = new AbortController()
     let timer = null
-    busy = true
 
     try {
-      const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          controller.abort()
-          reject(Object.assign(new Error('chat timeout'), { code: 'timeout' }))
-        }, CHAT_TIMEOUT_MS)
-      })
+      const maxRounds = hasTools ? MAX_TOOL_ROUNDS : 1
+      let body = null
+      let reply = ''
+      // 工具回填的累计字符上限：只限制单次结果 6000 字不够，多轮累加会把上下文撑爆。
+      let toolChars = 0
 
-      const response = await Promise.race([
-        fetchJson(CHAT_ENDPOINT, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            Accept: 'application/json'
-          },
-          body: JSON.stringify({
-            model: config.model,
-            messages,
-            temperature: config.temperature,
-            max_tokens: config.maxTokens,
-            stream: false
+      for (let round = 0; round < maxRounds; round++) {
+        // 每轮一个独立 AbortController：一轮超时只作废这一轮，后面轮次还能继续发。
+        const roundController = new AbortController()
+        // abort 会让 fetch 抛 AbortError，统一转成 timeout。
+        timer = setTimeout(() => roundController.abort(), CHAT_TIMEOUT_MS)
+        let response
+        try {
+          response = await fetchJson(CHAT_ENDPOINT, {
+            method: 'POST',
+            signal: roundController.signal,
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+              Accept: 'application/json'
+            },
+            body: JSON.stringify({
+              model: config.model,
+              messages: roundMessages,
+              temperature: config.temperature,
+              max_tokens: config.maxTokens,
+              stream: false,
+              ...(hasTools ? { tools: TOOL_DEFINITIONS } : {})
+            })
           })
-        }),
-        timeout
-      ])
+        } catch (error) {
+          if (error?.name === 'AbortError' || error?.code === 'timeout') {
+            throw Object.assign(new Error('chat timeout'), { code: 'timeout' })
+          }
+          throw error
+        } finally {
+          clearTimeout(timer)
+        }
 
-      if (!response.ok) {
-        return await offlineFallback(mapStatus(response.status), { message: `HTTP ${response.status}` })
+        if (!response.ok) {
+          return await offlineFallback(mapStatus(response.status), { message: `HTTP ${response.status}` })
+        }
+
+        body = await response.json()
+        const msg = body?.choices?.[0]?.message
+        const toolCalls = Array.isArray(msg?.tool_calls) ? msg.tool_calls : []
+
+        if (toolCalls.length > 0 && round < maxRounds - 1) {
+          // 模型要调工具：把带 tool_calls 的 assistant 消息回填，再逐条执行工具、
+          // 结果作为 role:tool 接在后面，进入下一轮请求。
+          roundMessages.push({
+            role: 'assistant',
+            content: typeof msg?.content === 'string' ? msg.content : null,
+            tool_calls: toolCalls
+          })
+          for (const toolCall of toolCalls) {
+            if (toolChars > TOOL_ROUND_CHAR_BUDGET) {
+              // 上下文预算已满：协议上必须为每个 tool_call 回一条结果，用最短的失败说明占位。
+              roundMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: JSON.stringify({ ok: false, error: '上下文预算已满，本轮工具不再执行' })
+              })
+              continue
+            }
+            const result = await executeToolCall(toolCall, { source, scope })
+            toolChars += String(result ?? '').length
+            roundMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: result })
+          }
+          continue
+        }
+
+        // 最后一轮模型还坚持调工具：内容通常为空，记一笔再走兜底，不让请求静默消失。
+        if (toolCalls.length > 0) {
+          log?.(`工具轮次用尽（第 ${round + 1}/${maxRounds} 轮仍有 ${toolCalls.length} 次工具调用）`)
+        }
+
+        reply = typeof msg?.content === 'string' ? msg.content : ''
+        break
       }
 
-      const body = await response.json()
-      const reply = body?.choices?.[0]?.message?.content
       if (typeof reply !== 'string' || reply.trim() === '') {
         return await offlineFallback('bad-response')
       }
@@ -829,6 +1156,13 @@ export function createChatService(options) {
       let answer = guarded.text
       if (guarded.notes.length > 0) {
         log?.(`发送前清理：${guarded.notes.map((item) => item.detail).join('、')}`)
+      }
+      // 腔调守卫：把「我记下了」「比之前重」这类记账式句子整句摘掉。
+      // 整段都被摘空时不强发空消息，保留原句，只记一笔。
+      const voiced = cleanVoice(answer)
+      if (voiced.dropped > 0) {
+        log?.(`腔调清理：${voiced.dropped} 句（${voiced.hits.join('、')}）`)
+        if (voiced.text !== '') answer = voiced.text
       }
       // 群聊里再查一次引用归属：引错了人，改成「刚才某某说」。
       if (source?.chatType === 'group') {
@@ -856,7 +1190,12 @@ export function createChatService(options) {
           if (filtered !== null && typeof filtered === 'object' && filtered.ok === false) {
             const safe = String(filtered.text ?? '').trim()
             log?.(`贴近红线：退回普通台词（${String(filtered.reason ?? 'redline')}）`)
-            if (safe !== '') answer = safe
+            if (safe !== '') {
+              answer = safe
+            } else {
+              // 红线命中却没有可替换的安全台词：宁可不发，也不把原文放出去。
+              return { ok: false, reason: 'intimacy-redline' }
+            }
           } else if (intimacyNote !== '') {
             intimacySpoken = true
           }
@@ -867,9 +1206,10 @@ export function createChatService(options) {
       const emojiId = parsed.emojiId
       const stickerLabel = stickerParsed.label
 
-      // 存原文，不存带前缀的版本：界面回看和记忆摘要都该是干净的话。
+      // 历史与记忆都存模型真正收到的那一句（已剥唤醒词）：口径一致，
+      // 下一轮上下文里不会重新出现唤醒词，回看界面也不需要猜模型看到的是什么。
       // assistant 没有 source，但同样要带 scope——否则重启后一轮问答会被拆到两个桶。
-      const userTurn = { role: 'user', content: text, at, source, scope }
+      const userTurn = { role: 'user', content: spoken, at, source, scope }
       const assistantTurn = { role: 'assistant', content: answer, at, scope }
       historyTurns.push(userTurn)
       historyTurns.push(assistantTurn)
@@ -886,20 +1226,21 @@ export function createChatService(options) {
       // 真说出口才记账：只记「今天有过一次」，不记说了什么。
       if (intimacySpoken && typeof onIntimacySpoken === 'function') {
         try {
-          onIntimacySpoken()
+          onIntimacySpoken(scope)
         } catch (error) {
           log?.('贴近记账失败：', String(error?.message ?? error))
         }
       }
 
       // 两路落盘互不牵连：记忆供提示词用，历史供界面回看。
-      // 任何一路失败都只记日志，不影响这次回复。
+      // 记忆写入带超时地等待完成：互斥还占着，下一轮不会抢跑，
+      // 这一轮记得的东西在下一轮开始前已经落进内存；卡住也只拖 3 秒。
       if (typeof onExchange === 'function') {
-        try {
-          onExchange({ user: text, assistant: answer, at, scope, source })
-        } catch (error) {
-          log?.('记忆写入回调失败：', String(error?.message ?? error))
-        }
+        await withTimeout(
+          () => onExchange({ user: spoken, assistant: answer, at, scope, source }),
+          null,
+          3_000
+        )
       }
       if (typeof persistTurn === 'function') {
         for (const turn of [userTurn, assistantTurn]) {
@@ -947,7 +1288,10 @@ export function createChatService(options) {
       return await offlineFallback('request-failed', { message: String(error?.message ?? error) })
     } finally {
       if (timer !== null) clearTimeout(timer)
-      busy = false
+    }
+    } finally {
+      // 无论哪条路径离开，都把互斥让出来；排队中的下一轮才能进场。
+      busyScope = null
     }
   }
 
@@ -989,7 +1333,7 @@ export function createChatService(options) {
       provider: config.provider,
       model: config.model,
       historyCount: totalTurns(),
-      busy
+      busy: busyScope !== null
     }
   }
 

@@ -572,3 +572,183 @@ button {
     width: 120px;
   }
 }
+
+/* QQ 三份快照（并进观察台记忆页） */
+
+.m-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 900px) {
+  .m-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.m-col {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.m-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.m-col-head h2 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--accent-deep);
+}
+
+.m-count {
+  font-size: 11px;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.m-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.m-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: var(--surface-soft);
+}
+
+.m-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.m-name {
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.m-meta {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.m-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* 贴近时刻的会话开关：只出现在 QQ 私聊条目上，轻一点，不抢注意力。 */
+.m-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.m-switch input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.m-switch input:disabled {
+  opacity: 0.55;
+}
+
+/* 「让她消气」这类一次性动作：看着像开关，按一下就完事。 */
+.m-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.m-quiet:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.m-quiet:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.m-tag {
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+.m-tag.is-plain {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.m-sub {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.m-sub-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.m-sub-name {
+  color: var(--ink);
+}
+
+.m-empty {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}

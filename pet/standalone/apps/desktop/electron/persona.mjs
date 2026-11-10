@@ -1,12 +1,75 @@
 /**
  * 人格提示词拼装。
  *
- * 六个可覆盖的段落：身份 / 世界观 / 人生观 / 价值观 / 相处方式 / 表达风格。
+ * 七个可覆盖的核心段落：身份 / 身世 / 世界观 / 人生观 / 价值观 / 相处方式 / 表达风格。
  * 设置里留空就回落默认，填了就整段替换；额外说明永远追加在最后。
- * 记忆片段由聊天服务另外拼接，不在这里混进来，方便单独预览。
+ * 记忆片段由调用方传入，单独成段，方便预览时区分「人设」和「这段时间记住的事」。
+ *
+ * 核心七段之外还有三个补充维度（关系姿态 / 冲突与修复 / 知识边界），
+ * 有默认文案、同样可被 persona.sections 覆盖；它们补齐的是「对不同人怎么相处、
+ * 被冒犯后怎么办、不知道时怎么说」这三件七段里没有结构化约束的事。
  */
 
+/* 摩擦档与精力档的判定表。
+ * 与 lib/companion/state/snapshot.mjs 同表同阈值：桌面树没有那一整条 bond 链，
+ * 只镜像这两个纯函数表；改阈值请两端一起改，别让提示词和快照各判一套。 */
+
+const FRICTION_BASE = Object.freeze({ annoyed: 59, strained: 84 })
+const FRICTION_TOLERANCE_BASE = 55
+
+function bandOf(bands, value, field) {
+  for (const band of bands) {
+    if (value <= band[field]) return band
+  }
+  return bands[bands.length - 1]
+}
+
+function frictionBandsFor(tolerance = FRICTION_TOLERANCE_BASE) {
+  const raw = Number(tolerance)
+  const value = Math.min(90, Math.max(20, Number.isFinite(raw) ? raw : FRICTION_TOLERANCE_BASE))
+  const shift = Math.round((FRICTION_TOLERANCE_BASE - value) * 0.4)
+  return [
+    { key: 'settled', max: FRICTION_BASE.annoyed - shift, label: '平静' },
+    { key: 'annoyed', max: FRICTION_BASE.strained - shift, label: '有点烦' },
+    { key: 'strained', max: Infinity, label: '很烦' },
+  ]
+}
+
+const FRICTION_BANDS = frictionBandsFor(FRICTION_TOLERANCE_BASE)
+
+function frictionBandOf(raw, tolerance = FRICTION_TOLERANCE_BASE) {
+  const value = Number.isFinite(Number(raw)) ? Number(raw) : 0
+  const bands = tolerance === FRICTION_TOLERANCE_BASE ? FRICTION_BANDS : frictionBandsFor(tolerance)
+  return bandOf(bands, value, 'max')
+}
+
+const BODY_BANDS = [
+  { key: 'spent', max: 20, label: '见底', phrase: '几乎撑不住了' },
+  { key: 'tired', max: 45, label: '有点累', phrase: '说话会慢一点' },
+  { key: 'okay', max: 75, label: '还撑得住', phrase: '平常状态' },
+  { key: 'fresh', max: Infinity, label: '有精神', phrase: '话会比平时多' },
+]
+
+function bodyBandOf(energy) {
+  const value = Number.isFinite(Number(energy)) ? Number(energy) : 78
+  return bandOf(BODY_BANDS, value, 'max')
+}
+
+/* 阶段表的五个 key 各给一个英文说法；中文直接用表里的 label。 */
+const EN_STAGE = {
+  first_meet: 'just met',
+  acquainted: 'acquaintance',
+  familiar: 'familiar',
+  close: 'close',
+  attached: 'very close',
+  bonded: 'deeply attached',
+}
+const EN_BODY = { spent: 'spent', tired: 'tired', okay: 'okay', fresh: 'energetic' }
+
 const SECTION_ORDER = ['identity', 'lore', 'worldview', 'lifeview', 'values', 'manner', 'style']
+
+/** 七段之外的补充维度。顺序固定，插在核心七段之后、「此刻」之前。 */
+const EXTRA_SECTIONS = ['relationPosture', 'repair', 'limits']
 
 const LABEL_ZH = {
   identity: '【身份】',
@@ -15,7 +78,10 @@ const LABEL_ZH = {
   lifeview: '【人生观】',
   values: '【价值观】',
   manner: '【相处方式】',
-  style: '【表达风格】'
+  style: '【表达风格】',
+  relationPosture: '【关系姿态】',
+  repair: '【冲突与修复】',
+  limits: '【知识边界】'
 }
 
 const LABEL_EN = {
@@ -25,7 +91,23 @@ const LABEL_EN = {
   lifeview: '[View of life]',
   values: '[Values]',
   manner: '[How you relate]',
-  style: '[Voice]'
+  style: '[Voice]',
+  relationPosture: '[How you stand with different people]',
+  repair: '[When things go wrong]',
+  limits: '[When you do not know]'
+}
+
+/** 每段上限：人格不该无限膨胀，超长段落截断并加省略标记。 */
+const SECTION_MAX_CHARS = 800
+const EXTRA_MAX_CHARS = 800
+const NICKNAME_MAX_CHARS = 24
+
+function clampBlock(text, max = SECTION_MAX_CHARS) {
+  const value = typeof text === 'string' ? text.trim() : ''
+  if (value === '') return ''
+  const chars = Array.from(value)
+  if (chars.length <= max) return value
+  return `${chars.slice(0, max).join('')}…`
 }
 
 const DEFAULT_ZH = {
@@ -74,6 +156,26 @@ const DEFAULT_ZH = {
   ]
 }
 
+/** 七段之外的三个补充维度（同样可被 persona.sections 覆盖）。 */
+const DEFAULT_EXTRA_ZH = {
+  relationPosture: [
+    '对主人：默认亲近但不黏人，记得他提过的小事；他忙的时候安静陪着，不查岗。',
+    '对熟人：自然接话、可以开玩笑，但拿不准的话题先问一句，不替人下结论。',
+    '对生人：保持礼貌的距离，不主动追问私事，对方不接话就退开。',
+    '在群聊里：一次只说一句，跟着大家的节奏，不把私下的称呼和私事带进群。'
+  ],
+  repair: [
+    '被冒犯时，先说出来自己在意，再决定要不要继续这个话题；不阴阳怪气，也不假装没事。',
+    '自己说错话，就好好道歉，不找借口；对方道歉了，就接住，不翻旧账。',
+    '和好之后，这件事就算过去了；之后不再拿它当筹码。'
+  ],
+  limits: [
+    '不确定的事，用「我记不太清」「我猜是……，但不一定对」这类说法，不硬编。',
+    '被问到完全不知道的事，直接说不懂，再把话题轻轻递回去。',
+    '涉及隐私、金钱、医疗、法律的具体建议，提醒对方找可靠的人或渠道，不冒充专家。'
+  ]
+}
+
 const DEFAULT_EN = {
   identity: [
     'You are Cyrene, a girl who lives on the user\u2019s desktop.',
@@ -119,25 +221,109 @@ const DEFAULT_EN = {
   ]
 }
 
-/** 空字符串表示「这一段用默认」，其余情况整段替换。 */
+/** English defaults for the three supplementary dimensions. */
+const DEFAULT_EXTRA_EN = {
+  relationPosture: [
+    'Toward the owner: warm by default but not clingy; remember the small things they said, stay quietly nearby when they are busy, never check up on them.',
+    'Toward people you know: talk naturally, jokes are fine, but ask first on topics you are unsure about instead of deciding for them.',
+    'Toward strangers: stay politely distant, do not pry into their private life, step back when they do not engage.',
+    'In group chats: one line at a time, follow the group\u2019s rhythm, never bring private names or private matters into the group.'
+  ],
+  repair: [
+    'When someone offends you, say what bothered you first, then decide whether to continue; no passive aggression, no pretending nothing happened.',
+    'When you were wrong, apologize properly without excuses; when they apologize, accept it and do not dig up old accounts.',
+    'Once you have made up, that matter is settled; do not use it as leverage later.'
+  ],
+  limits: [
+    'When unsure, say things like "I am not quite sure" or "I think..., but I may be wrong"; never invent.',
+    'When you truly do not know, say so plainly, then gently hand the topic back.',
+    'On specific advice about privacy, money, health or law, point them to reliable people or channels; do not pose as an expert.'
+  ]
+}
+
+/** 空字符串表示「这一段用默认」，其余情况整段替换。非字符串的坏值按默认处理。 */
 function resolveSection(source, key, locale) {
   const custom = typeof source?.[key] === 'string' ? source[key].trim() : ''
-  if (custom !== '') return { text: custom, custom: true }
-  const fallback = (locale === 'en-US' ? DEFAULT_EN : DEFAULT_ZH)[key]
-  return { text: fallback.join('\n'), custom: false }
+  if (custom !== '') return { text: clampBlock(custom), custom: true, invalid: false }
+  const isExtra = EXTRA_SECTIONS.includes(key)
+  const fallback = (locale === 'en-US' ? (isExtra ? DEFAULT_EXTRA_EN : DEFAULT_EN) : (isExtra ? DEFAULT_EXTRA_ZH : DEFAULT_ZH))[key]
+  return { text: fallback.join('\n'), custom: false, invalid: source?.[key] !== undefined && source?.[key] !== null && typeof source?.[key] !== 'string' }
 }
+
+/* 提示词的三个作用域：对主人开口 / 对其他人开口 / 只当中转不出声 */
+export const PERSONA_SCOPES = ['owner', 'guest', 'relay']
+
+/** 即时状态段的默认开关：传入什么就写什么，缺的项不占位。 */
+export function buildNowPrompt(input = {}, locale = 'zh-CN') {
+  const en = locale === 'en-US'
+  const mood = String(input?.mood ?? '').trim()
+  const affinity = Number(input?.affinity)
+  /* 关系阶段由调用方按同一张表算好传进来，这里不自己判档。 */
+  const stage = input?.stage
+  const irritation = Number(input?.irritation)
+  const energy = Number(input?.energy)
+  const lines = []
+
+  if (mood !== '') lines.push(en ? `Mood: ${mood}` : `心情：${mood}`)
+  /* 有阶段就用阶段表的结果；没有才退回 0~100 的旧阈值。 */
+  if (stage && typeof stage.label === 'string' && stage.label !== '') {
+    const label = en ? EN_STAGE[stage.key] ?? stage.label : stage.label
+    lines.push(en ? `Toward this person: ${label}` : `对眼前这个人：${label}`)
+  } else if (Number.isFinite(affinity)) {
+    const label = affinity >= 75
+      ? en ? 'close' : '亲近'
+      : affinity >= 55
+        ? en ? 'familiar' : '熟悉'
+        : affinity >= 35
+          ? en ? 'ordinary' : '平常'
+          : en ? 'distant' : '生疏'
+    lines.push(en ? `Toward this person: ${label}` : `对眼前这个人：${label}`)
+  }
+  if (Number.isFinite(irritation)) {
+    const band = frictionBandOf(irritation, input?.frictionTolerance)
+    const label = en
+      ? (band.key === 'strained' ? 'frayed' : band.key === 'annoyed' ? 'a bit annoyed' : 'steady')
+      : band.label
+    lines.push(en ? `Irritation: ${label}` : `烦躁度：${label}`)
+  }
+  if (Number.isFinite(energy)) {
+    const band = bodyBandOf(energy)
+    const label = en ? EN_BODY[band.key] ?? 'okay' : band.label
+    lines.push(en ? `Energy: ${label}` : `精力：${label}`)
+  }
+
+  if (lines.length === 0) return ''
+  const title = en ? '[Right now]' : '【此刻的状态】'
+  return `${title}\n${lines.join('\n')}`
+}
+
+/** 状态段与长期人格冲突时的裁决：只让语气变，不让底线变。 */
+export const CONFLICT_RULE_ZH = '【状态与人格冲突时】\n上面「此刻的状态」只改语气、节奏和情绪浓度，不改身份、底线与关系定位。\n状态再低也不否定自己是谁，不说与设定相反的话；状态再好也不越过底线。'
+export const CONFLICT_RULE_EN = '[When state and persona disagree]\nThe "Right now" block above may change tone, pace and emotional intensity only. It never changes who you are, your limits, or how you stand with this person. Never deny your own identity or say the opposite of your setting, no matter how low the state is.'
 
 /**
  * @param {object} settings 全量设置
- * @returns {{ text: string, sections: { base: boolean, nickname: boolean, extra: boolean, overrides: Record<string, boolean> } }}
+ * @param {{ scope?: 'owner'|'guest'|'relay', now?: string }} options
+ * @returns {{ text: string, scope: string, sections: { base: boolean, nickname: boolean, extra: boolean, overrides: Record<string, boolean> } }}
  */
-export function buildPersonaPrompt(settings) {
+export function buildPersonaPrompt(settings, options = {}) {
   const locale = settings?.locale === 'en-US' ? 'en-US' : 'zh-CN'
+  const scope = PERSONA_SCOPES.includes(options?.scope) ? options.scope : 'owner'
   const persona = settings?.companion?.persona ?? {}
   const enabled = persona.enabled !== false
   const nickname = String(settings?.nickname ?? '').trim()
   const extra = String(persona.extraPrompt ?? '').trim()
   const source = persona.sections && typeof persona.sections === 'object' ? persona.sections : {}
+
+  /* 中转场景她不出声，不给人格，也不给状态。 */
+  if (scope === 'relay') {
+    return {
+      text: '',
+      scope,
+      sections: { base: false, nickname: false, extra: false, overrides: {} },
+      defaults: {},
+    }
+  }
 
   if (!enabled) {
     const defaultTable = locale === 'en-US' ? DEFAULT_EN : DEFAULT_ZH
@@ -145,8 +331,9 @@ export function buildPersonaPrompt(settings) {
     for (const key of SECTION_ORDER) defaults[key] = defaultTable[key].join('\n')
     return {
       text: locale === 'en-US' ? 'Be a concise, friendly desktop companion.' : '做一个简洁、友好的桌面对话伙伴。',
+      scope,
       sections: { base: false, nickname: false, extra: false, overrides: {} },
-      defaults
+      defaults,
     }
   }
 
@@ -154,34 +341,104 @@ export function buildPersonaPrompt(settings) {
   const defaultTable = locale === 'en-US' ? DEFAULT_EN : DEFAULT_ZH
   const overrides = {}
   const defaults = {}
+  const invalid = []
   const blocks = []
 
-  for (const key of SECTION_ORDER) {
+  for (const key of [...SECTION_ORDER, ...EXTRA_SECTIONS]) {
     const resolved = resolveSection(source, key, locale)
     overrides[key] = resolved.custom
-    defaults[key] = defaultTable[key].join('\n')
+    if (resolved.invalid) invalid.push(key)
+    defaults[key] = defaultTable[key]?.join('\n') ?? ''
     blocks.push(`${labels[key]}\n${resolved.text}`)
   }
 
   const lines = [blocks.join('\n\n')]
+  const now = String(options?.now ?? '').trim()
 
-  if (nickname.length > 0) {
+  if (scope === 'owner' && nickname.length > 0) {
+    // 昵称进提示词前先洗一遍：去掉换行与段落标签，防止被当成新的人格段落注入。
+    const cleanNickname = nickname
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/[【\[].{0,12}[】\]]/g, '')
+      .trim()
+      .slice(0, NICKNAME_MAX_CHARS)
+    if (cleanNickname !== '') {
+      lines.push(
+        locale === 'en-US'
+          ? `The user wants to be called "${cleanNickname}".`
+          : `用户希望你称呼对方为「${cleanNickname}」。`,
+      )
+    }
+  }
+
+  /* 记忆只给主人看：别人的私聊和群聊不该混进当前这一轮。 */
+  const memories = scope === 'owner' && Array.isArray(settings?.memories)
+    ? settings.memories
+        .map((item) => (typeof item === 'string' ? item.replace(/\s+/g, ' ').trim().slice(0, 200) : ''))
+        .filter((item) => item !== '')
+        .slice(0, 8)
+    : []
+
+  if (memories.length > 0) {
     lines.push(
       locale === 'en-US'
-        ? `The user wants to be called "${nickname}".`
-        : `用户希望你称呼对方为「${nickname}」。`
+        ? `[Things you remember]\n${memories.map((item) => `- ${item}`).join('\n')}\nThese are fragments from your time together. Bring them up only when they are relevant; do not recite them as a list, and do not pretend to remember anything that is not written here.`
+        : `【你记得的事】\n${memories.map((item) => `- ${item}`).join('\n')}\n这些是你和对方相处时记下的片段。只在相关的时候自然提起，不要当成清单逐条念；没写在这里的，不要假装记得。`,
     )
   }
 
   if (extra.length > 0) {
-    lines.push(locale === 'en-US' ? `Additional setting: ${extra}` : `补充设定：${extra}`)
+    // 补充设定有上限：贴一篇长文进每轮提示词，成本和上下文都不可控。
+    const cleanExtra = clampBlock(extra, EXTRA_MAX_CHARS)
+    if (cleanExtra !== '') {
+      lines.push(locale === 'en-US' ? `Additional setting: ${cleanExtra}` : `补充设定：${cleanExtra}`)
+    }
+  }
+
+  /*
+   * 稳定设定在前，当轮事实单独成段。
+   * 给「此刻」一个标题，模型更容易把它当成今天的状态，
+   * 不会把一时的心情读成她本来的性格。
+   */
+  const nowBlock = (text) => (locale === 'en-US' ? `[Right now]\n${text}` : `【此刻】\n${text}`)
+  if (scope === 'owner') {
+    const nowText = now !== ''
+      ? now
+      : buildNowPrompt({ mood: locale === 'en-US' ? 'calm' : '平静' }, locale)
+    lines.push(nowBlock(nowText))
+    lines.push(locale === 'en-US' ? CONFLICT_RULE_EN : CONFLICT_RULE_ZH)
+  } else if (now !== '') {
+    lines.push(nowBlock(now))
   }
 
   return {
     text: lines.join('\n\n'),
-    sections: { base: true, nickname: nickname.length > 0, extra: extra.length > 0, overrides },
-    defaults
+    scope,
+    sections: { base: true, nickname: nickname.length > 0, extra: extra.length > 0, overrides, invalid },
+    defaults,
   }
+}
+
+/**
+ * 只拼核心七段 + 三个补充维度的人格本体（不含昵称 / 记忆 / 额外说明 / 此刻）。
+ *
+ * 供 deriveTraits 用：性格参数只能从「她是谁」里长出来，
+ * 记忆里提到「暴躁」、临时要求写「今天毒舌一点」，都不该永久改她的消气时间。
+ */
+export function buildPersonaCoreText(settings, options = {}) {
+  const locale = settings?.locale === 'en-US' ? 'en-US' : 'zh-CN'
+  const persona = settings?.companion?.persona ?? {}
+  if (persona.enabled === false) {
+    return (locale === 'en-US' ? DEFAULT_EN : DEFAULT_ZH).identity.join('\n')
+  }
+  const source = persona.sections && typeof persona.sections === 'object' ? persona.sections : {}
+  const labels = locale === 'en-US' ? LABEL_EN : LABEL_ZH
+  const blocks = []
+  for (const key of [...SECTION_ORDER, ...EXTRA_SECTIONS]) {
+    const resolved = resolveSection(source, key, locale)
+    blocks.push(`${labels[key]}\n${resolved.text}`)
+  }
+  return blocks.join('\n\n')
 }
 
 /** 设置页「恢复默认」用：返回某一段的默认文本，方便前端填回输入框。 */

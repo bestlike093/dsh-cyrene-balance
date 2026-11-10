@@ -12,11 +12,13 @@ import { DailyBudgetGate } from '@pet/core/browser'
 
 const DEFAULT_WARN_RATIO = 0.8
 
-function readBudgetSettings(getSettings) {
+function readBudgetSettings(getSettings, log = () => {}) {
   let settings
   try {
     settings = getSettings()
-  } catch {
+  } catch (error) {
+    // 读配置失败按「额度未启用」放行，但必须留日志可查，不能无声吞掉。
+    log('额度配置读取失败，按未启用处理', error)
     settings = null
   }
   const raw = settings?.companion?.care?.dailyTokenBudget
@@ -25,8 +27,11 @@ function readBudgetSettings(getSettings) {
   const warnRatio = Number.isFinite(Number(value.warnRatio))
     ? Math.min(1, Math.max(0, Number(value.warnRatio)))
     : DEFAULT_WARN_RATIO
+  // 兼容设置里写成 1 / 'true' / '1' 的真值形态，别只有严格 === true 才认。
+  const enabledValue =
+    value.enabled === true || value.enabled === 1 || value.enabled === 'true' || value.enabled === '1'
   return {
-    enabled: value.enabled === true && limit > 0,
+    enabled: enabledValue && limit > 0,
     limit,
     warnRatio
   }
@@ -50,21 +55,29 @@ export function createDailyBudget(options = {}) {
   let gate = null
   let signature = ''
   let lastState = null
+  /** 读状态失败标记：置位后禁止写盘，避免用归零状态覆盖当天的真实用量。 */
+  let degraded = false
 
   function gateOptions(config) {
     return { dailyLimit: config.limit, warnRatio: config.warnRatio, now }
   }
 
   function current() {
-    const config = readBudgetSettings(getSettings)
+    const config = readBudgetSettings(getSettings, log)
     const nextSignature = `${config.limit}:${config.warnRatio}`
-    if (gate === null || nextSignature !== signature) {
+    // degraded 时每次调用都重试读状态：读成功就解除降级，别一直停在「不落盘」。
+    if (gate === null || nextSignature !== signature || degraded) {
       let restored = lastState
-      try {
-        if (typeof readState === 'function') restored = readState()
-      } catch (error) {
-        log('额度状态读取失败，从零开始记', error)
-        restored = null
+      if (typeof readState === 'function') {
+        try {
+          restored = readState()
+          degraded = false
+        } catch (error) {
+          // 读不出当天的真实用量：不重建归零状态写盘，宁可这轮少记也不覆盖。
+          log('额度状态读取失败，本次会话暂停落盘', error)
+          degraded = true
+          restored = lastState
+        }
       }
       try {
         gate =
@@ -84,6 +97,8 @@ export function createDailyBudget(options = {}) {
   }
 
   function persist() {
+    // 读状态失败过的会话不落盘：手里只有归零或旧值，写盘会覆盖当天的真实用量。
+    if (degraded) return
     if (gate === null || typeof writeState !== 'function') return
     try {
       const state = gate.serialize()
@@ -124,7 +139,8 @@ export function createDailyBudget(options = {}) {
   function status() {
     try {
       const { config, gate: instance } = current()
-      return { enabled: config.enabled, ...instance.status() }
+      // instance.status() 先展开、enabled 后放：设置层的开关优先，不被内部状态覆盖。
+      return { ...instance.status(), enabled: config.enabled }
     } catch (error) {
       log('额度状态读取失败', error)
       return null

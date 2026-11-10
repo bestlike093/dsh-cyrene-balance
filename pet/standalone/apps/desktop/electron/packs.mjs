@@ -12,6 +12,7 @@
  * 这里只做磁盘操作，不碰 Electron；主进程负责注入 root 和日志。
  */
 import AdmZip from 'adm-zip'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -60,7 +61,10 @@ function sanitizeId(raw, fallback) {
     .replace(/^\.+$/, '')
     .slice(0, 64)
     .trim()
-  return cleaned.length > 0 ? cleaned : fallback
+  // 点开头一律拒绝：.inbox、.import-*、.disabled.json 这类内部目录不该能通过 id 触达。
+  // 视同空名走 fallback；校验型调用方（remove/setEnabled/resolvePackPath）传的是空 fallback，
+  // 结果会与原始 id 不相等而被拒掉。
+  return cleaned.length > 0 && !cleaned.startsWith('.') ? cleaned : fallback
 }
 
 async function pathExists(target) {
@@ -251,18 +255,47 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
 
   /** 被禁用的包只记 id；文件放在 packs 根下，`.import-*` 与它都会被列表跳过。 */
   async function readDisabled() {
+    const file = path.join(root, '.disabled.json')
+    let raw
     try {
-      const raw = await fs.readFile(path.join(root, '.disabled.json'), 'utf8')
-      const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : []
-    } catch {
+      raw = await fs.readFile(file, 'utf8')
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && error.code === 'ENOENT') return []
+      log('[packs] 读取禁用清单失败：', String(error?.message ?? error))
       return []
     }
+    let parsed = null
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      parsed = null
+    }
+    if (Array.isArray(parsed)) return parsed.filter((id) => typeof id === 'string')
+    // 坏 JSON 或不是数组：先把旧文件改名隔离留档，再当空清单返回。
+    // 不隔离的话，下一次 setEnabled 写盘会把旧记录整个覆盖掉。
+    const corruptPath = `${file}.corrupt-${Date.now()}`
+    try {
+      await fs.rename(file, corruptPath)
+      log('[packs] 禁用清单损坏，已隔离到', corruptPath)
+    } catch (error) {
+      log('[packs] 隔离损坏的禁用清单失败：', String(error?.message ?? error))
+    }
+    return []
   }
+
+  /** 禁用清单写串行化：并发 setEnabled 时后完成的不许把先完成的覆盖掉。 */
+  let disabledWriteChain = Promise.resolve()
 
   async function writeDisabled(ids) {
     const unique = [...new Set(ids)]
-    await fs.writeFile(path.join(root, '.disabled.json'), JSON.stringify(unique, null, 2), 'utf8')
+    const file = path.join(root, '.disabled.json')
+    const run = async () => {
+      // 原子写：先落 .tmp 再改名，进程中途死掉也不会留下半个 JSON。
+      await fs.writeFile(`${file}.tmp`, JSON.stringify(unique, null, 2), 'utf8')
+      await fs.rename(`${file}.tmp`, file)
+    }
+    disabledWriteChain = disabledWriteChain.then(run, run)
+    await disabledWriteChain
   }
 
   /** 启用 / 停用一个包；只改清单，不删文件。 */
@@ -271,7 +304,9 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
     if (safe === '' || safe !== id) {
       throw packError('PACK_ID_INVALID', '素材包 id 非法')
     }
-    if (!(await pathExists(path.join(root, safe)))) {
+    // 存在还不够，必须是目录：同名文件不该被当成一个包。
+    const stat = await fs.stat(path.join(root, safe)).catch(() => null)
+    if (stat === null || !stat.isDirectory()) {
       throw packError('PACK_NOT_FOUND', '素材包不存在')
     }
     const disabled = new Set(await readDisabled())
@@ -423,7 +458,6 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
         continue
       }
       const baseName = path.basename(normalized)
-      if (isSkippable(baseName)) continue
       if (entry.isDirectory) continue
 
       if (isModelFile(baseName)) {
@@ -436,13 +470,10 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
       }
 
       const ext = extOf(baseName)
-      // README / LICENSE 这类附带文件直接跳过，不因为夹了一个说明文件就拒整包。
-      if (!IMAGE_EXTS.has(ext) && !FONT_EXTS.has(ext) && baseName !== 'pack.json') {
-        continue
-      }
-
+      const isAsset = IMAGE_EXTS.has(ext) || FONT_EXTS.has(ext) || baseName === 'pack.json'
       const size = entry.header.size
-      if (size > MAX_FILE_BYTES) {
+      // 单文件 16MB 上限只卡素材本身；README 这类附带文件不单独卡。
+      if (isAsset && size > MAX_FILE_BYTES) {
         issues.push({
           code: 'FILE_TOO_LARGE',
           message: `单个文件超过 16MB：${entry.entryName}`,
@@ -450,6 +481,8 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
         })
         continue
       }
+      // README / LICENSE / .DS_Store 这类非素材文件虽不参与分类，但一样会被解压落盘，
+      // 必须一起计入 128MB 总量，否则夹带一个大文件就能绕过上限。
       total += size
       if (total > MAX_TOTAL_BYTES) {
         const mb = Math.round(total / (1024 * 1024))
@@ -472,7 +505,8 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
     }
 
     await ensureRoot()
-    const staging = path.join(root, `.import-${Date.now()}`)
+    // 毫秒级时间戳挡不住同毫秒两次导入：加随机后缀，两个导入绝不共用 staging 互相删。
+    const staging = path.join(root, `.import-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`)
     await fs.mkdir(staging, { recursive: true })
 
     try {
@@ -534,9 +568,12 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
     if (safe === '' || safe !== id) {
       throw new Error('素材包 id 非法')
     }
-    const target = path.join(root, safe)
-    const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep
-    if (!target.startsWith(rootWithSep)) {
+    // 越界判断统一在 resolve 后的绝对路径上做：相对 root、尾分隔符、大小写都不会再干扰判断。
+    const rootAbs = path.resolve(root)
+    const target = path.resolve(rootAbs, safe)
+    const foldCase = (value) => (process.platform === 'win32' ? value.toLowerCase() : value)
+    const rootWithSep = rootAbs.endsWith(path.sep) ? rootAbs : rootAbs + path.sep
+    if (target === rootAbs || !foldCase(target).startsWith(foldCase(rootWithSep))) {
       throw new Error('素材包路径越界')
     }
     await fs.rm(target, { recursive: true, force: true })
@@ -554,7 +591,8 @@ export function createPackStore({ root, builtinRoot = null, log = () => {} }) {
     const packRoot = resolvePackRoot(safeId)
     const target = path.resolve(packRoot, relative)
     const rootWithSep = packRoot.endsWith(path.sep) ? packRoot : packRoot + path.sep
-    if (target !== packRoot && !target.startsWith(rootWithSep)) return null
+    // 目录本身不是素材文件，不给地址；下面只允许 packRoot 的真子路径。
+    if (target === packRoot || !target.startsWith(rootWithSep)) return null
     return target
   }
 

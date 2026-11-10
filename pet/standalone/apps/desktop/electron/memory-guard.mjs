@@ -29,6 +29,14 @@ export function createMemoryGuard(options = {}) {
     notify = () => {}
   } = options
 
+  // intervalMs 夹到 1 秒以上：0 / 负数 / 极小值会让定时器空转，
+  // 每秒一次自检没有意义，还会拖慢主进程。
+  const parsedInterval = Number(intervalMs)
+  const tickMs = Math.max(
+    1000,
+    Math.floor(Number.isFinite(parsedInterval) ? parsedInterval : DEFAULT_INTERVAL_MS)
+  )
+
   let timer = null
   let last = null
   let lastLevel = 'ok'
@@ -85,15 +93,22 @@ export function createMemoryGuard(options = {}) {
     lastLevel = snapshot.level
     if (snapshot.level === 'critical' && !releasing && snapshot.at - lastReleaseAt >= RELEASE_COOLDOWN_MS) {
       releasing = true
+      // 无论成败都推进冷却起点：释放失败多半是系统性问题，
+      // 不推进会变成每分钟重试一次，把主进程拖得更慢。
+      lastReleaseAt = snapshot.at
       try {
         await onRelease(snapshot)
         releaseCount += 1
-        lastReleaseAt = snapshot.at
-        notify(snapshot)
       } catch (error) {
         log('[memory] 释放缓存失败', error)
       } finally {
         releasing = false
+      }
+      // 提示用户重启是另一件事：它抛错不能被记成「释放失败」。
+      try {
+        notify(snapshot)
+      } catch (error) {
+        log('[memory] 释放后的用户提示失败', error)
       }
     }
     return snapshot
@@ -102,11 +117,12 @@ export function createMemoryGuard(options = {}) {
   function start() {
     if (timer !== null) return
     timer = setInterval(() => {
-      void check()
-    }, intervalMs)
+      // check 内部已尽力吞错，这里再兜一层，别让定时器因未捕获的 reject 崩掉。
+      check().catch((error) => log('[memory] 定时自检异常', error))
+    }, tickMs)
     timer.unref?.()
     // 启动时先采一次，别等到一分钟后才知道已经很高。
-    void check()
+    check().catch((error) => log('[memory] 启动自检异常', error))
   }
 
   function stop() {
@@ -122,7 +138,7 @@ export function createMemoryGuard(options = {}) {
         warnMb: Math.round((warnBytes / MB) * 10) / 10,
         criticalMb: Math.round((criticalBytes / MB) * 10) / 10
       },
-      intervalMs,
+      intervalMs: tickMs,
       releaseCount,
       running: timer !== null
     }

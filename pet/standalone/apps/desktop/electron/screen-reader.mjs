@@ -31,6 +31,8 @@ function cleanLine(raw) {
 /** 纯时钟、纯数字短串多半是状态栏，读了也没用。 */
 function isNoise(line) {
   if (/^\d{1,2}\s*[:：]\s*\d{2}$/.test(line)) return true
+  // 100% / 12 / 2026 这类纯数字短串同样是状态栏残字，单独出现没有语义，一并滤掉。
+  if (/^\d{1,8}(?:%|年)?$/.test(line)) return true
   return false
 }
 
@@ -74,11 +76,24 @@ export function summarizeScreenText(raw, options = {}) {
 
   const joined = kept.join(' / ')
   if (joined.length <= maxChars) return joined
-  return `${joined.slice(0, maxChars).trimEnd()}…`
+  // 按 Unicode 码点截断而不是 UTF-16 单元：emoji 这类代理对字符占两个单元，
+  // 直接 slice 会在字符中间劈开，截出一个乱码尾巴。
+  return `${Array.from(joined).slice(0, maxChars).join('').trimEnd()}…`
 }
 
-/** 主进程用：算出一块屏幕的缩略尺寸，太小认不出字，太大白烧 CPU。 */
-export function thumbnailSize(width, height, target = 1280) {
+/**
+ * 缩略图目标宽度：将来主进程接入 thumbnailSize 时用这个默认值，
+ * 替换现在硬编码在识屏截图里的 1280x800。
+ */
+export const DEFAULT_THUMBNAIL_TARGET = 1280
+
+/**
+ * 主进程用：算出一块屏幕的缩略尺寸，太小认不出字，太大白烧 CPU。
+ *
+ * 注意：主进程目前没有接入这个函数（识屏截图直接硬编码 1280x800），
+ * 这里是死代码，保留作为将来的尺寸约定。
+ */
+export function thumbnailSize(width, height, target = DEFAULT_THUMBNAIL_TARGET) {
   const w = Number(width)
   const h = Number(height)
   if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {

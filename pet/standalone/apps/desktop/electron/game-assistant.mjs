@@ -60,14 +60,22 @@ function normalizeState(value) {
   if (value === null || typeof value !== 'object') return base
   const source = value
   const weekly = Array.isArray(source.weekly)
-    ? source.weekly.filter(
-        (item) =>
-          item !== null &&
-          typeof item === 'object' &&
-          typeof item.id === 'string' &&
-          typeof item.weekKey === 'string' &&
-          Number.isFinite(item.points)
-      )
+    ? source.weekly
+        .filter(
+          (item) =>
+            item !== null &&
+            typeof item === 'object' &&
+            typeof item.id === 'string' &&
+            typeof item.weekKey === 'string' &&
+            Number.isFinite(item.points)
+        )
+        .map((item) => ({
+          ...item,
+          // completed/claimed 收敛成布尔：磁盘上写成 1 / 'true' 的脏数据
+          // 不该让 claim 的「未完整通关先核对积分」判断失真。
+          completed: item.completed === true,
+          claimed: item.claimed === true
+        }))
     : []
   return {
     version: STATE_VERSION,
@@ -144,8 +152,12 @@ export function createGameAssistantService(options = {}) {
   let state = defaultState()
   let loaded = false
 
-  async function load() {
-    if (loaded) return state
+  /**
+   * 读盘一次之后默认用内存副本；`force` 为 true 时强制重读，
+   * 给「磁盘被外部改过」的场景一条恢复路径。
+   */
+  async function load(force = false) {
+    if (loaded && force !== true) return state
     try {
       const raw = await readFile(filePath)
       state = normalizeState(JSON.parse(raw))
@@ -175,8 +187,8 @@ export function createGameAssistantService(options = {}) {
     }
   }
 
-  async function status() {
-    await load()
+  async function status(force = false) {
+    await load(force)
     const weekly = summary()
     return {
       version: STATE_VERSION,
@@ -197,9 +209,9 @@ export function createGameAssistantService(options = {}) {
     }
   }
 
-  /** 连续两次确认；每次调用只前进一步。 */
-  async function confirm(input) {
-    await load()
+  /** 连续两次确认；每次调用只前进一步。force 为 true 时先强制重读状态。 */
+  async function confirm(input, force = false) {
+    await load(force)
     const result = confirmRisk(state.risk, input ?? {}, now())
     if (result.ok) {
       state.risk = result.state

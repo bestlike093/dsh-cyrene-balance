@@ -157,6 +157,14 @@ export function registerMutationChannels(deps) {
                 ...(packId === '' ? {} : { packId }),
                 ...(name === '' ? {} : { name })
             });
+            // 入库成功立刻让表情库失效缓存：刚入库的表情下一轮挑图就该可见，
+            // 不能等 30 秒扫描缓存过期。
+            try {
+                deps.stickerLibrary?.invalidate?.();
+            }
+            catch (invalidateError) {
+                deps.log('[sticker] 表情库缓存失效失败：', describeError(invalidateError));
+            }
             deps.log('[sticker] 用户确认入库：', id);
             return {
                 ok: true,

@@ -14,7 +14,7 @@ import fs from 'node:fs/promises'
 import { createWriteStream, existsSync } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { decideLaunch, gameProcessName, normalizeDailyState } from '@pet/core/browser'
+import { decideLaunch, GAME_IDS, gameProcessName, normalizeDailyState } from '@pet/core/browser'
 
 const REPORT_DIR = 'runs'
 const LOG_FILE = 'stdout.log'
@@ -97,14 +97,27 @@ function runEngine({ program, args, cwd, logFile, onSpawn }) {
   })
 }
 
-/** Windows 下结束整棵进程树；只 kill 父进程经常留下游戏本体。 */
+/**
+ * Windows 下结束整棵进程树；只 kill 父进程经常留下游戏本体。
+ * 返回的 Promise 在 taskkill 进程退出后才落定，调用方要等它再写「已结束」。
+ */
 function killTree(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return
-  try {
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-  } catch {
-    // taskkill 不可用时只能让计划任务的上限来收尾。
-  }
+  if (!Number.isInteger(pid) || pid <= 0) return Promise.resolve()
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore'
+      })
+    } catch {
+      // taskkill 不可用时只能让计划任务的上限来收尾。
+      resolve()
+      return
+    }
+    child.on('error', () => resolve())
+    child.on('exit', () => resolve())
+  })
 }
 
 function sleep(ms) {
@@ -298,9 +311,13 @@ export async function runOnce(options) {
 
   let child = null
   let timedOut = false
+  let killDone = Promise.resolve()
   const watchdog = setTimeout(() => {
     timedOut = true
-    if (child !== null) killTree(child.pid)
+    if (child !== null) {
+      // taskkill 是异步的：先等它真把进程树结束掉，报告里才写「已结束进程树」。
+      killDone = killTree(child.pid)
+    }
   }, closeAfter)
 
   const result = await runEngine({
@@ -316,6 +333,7 @@ export async function runOnce(options) {
   clearTimeout(watchdog)
 
   if (timedOut) {
+    await killDone
     return finish({
       status: 'timeout',
       steps: [
@@ -353,6 +371,12 @@ async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.game === '' || args.stateDir === '') {
     console.error('用法：node game-daily-runner.mjs --game <id> --state-dir <目录> [--run-id <id>]')
+    process.exitCode = 2
+    return
+  }
+  // 白名单校验：--game 只能取 GAME_IDS 里的值，防止拼进 runs 目录路径越界。
+  if (!GAME_IDS.includes(args.game)) {
+    console.error(`[runner] 未知游戏：${args.game}，可用：${GAME_IDS.join('、')}`)
     process.exitCode = 2
     return
   }

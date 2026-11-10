@@ -124,6 +124,8 @@ export function createStickerLibrary({ roots = [], log = () => {} } = {}) {
       }
       for (const entry of entries) {
         if (entry.name.startsWith('.')) continue
+        // symlink / junction 一律跳过：可能指回本树造成无限递归，也可能扫到素材目录之外。
+        if (entry.isSymbolicLink()) continue
         const abs = path.join(dir, entry.name)
         const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`
         if (entry.isDirectory()) {
@@ -217,6 +219,8 @@ export function createStickerLibrary({ roots = [], log = () => {} } = {}) {
     if (exact !== undefined) return exact
     const byName = items.find((item) => item.name.toLowerCase() === key)
     if (byName !== undefined) return byName
+    // 兜底包含匹配只对多字词开：单字（如「笑」）会撞上「偷笑」「大笑」「害羞」一大片，等于乱挑。
+    if (key.length === 1) return null
     return items.find((item) => item.label.toLowerCase().includes(key)) ?? null
   }
 

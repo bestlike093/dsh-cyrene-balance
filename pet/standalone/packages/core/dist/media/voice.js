@@ -75,6 +75,8 @@ export function buildTtsRequest(settings, text) {
             throw new TtsSettingsError('refAudioPath', '本地合成需要先填参考音频路径');
         }
         const lang = settings.promptLang?.trim() ?? 'zh';
+        // 参考文本：GPT-SoVITS 靠它对齐音色；空着提交空串，音色会差一截。
+        const promptText = settings.promptText?.trim() ?? '';
         return {
             url: settings.baseUrl.trim(),
             method: 'POST',
@@ -83,7 +85,7 @@ export function buildTtsRequest(settings, text) {
                 text: content,
                 text_lang: lang,
                 ref_audio_path: refAudioPath,
-                prompt_text: '',
+                prompt_text: promptText,
                 prompt_lang: lang,
                 text_split_method: 'cut5',
                 batch_size: 1,

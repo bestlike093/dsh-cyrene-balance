@@ -27,8 +27,46 @@ body {
      所以窗口再矮也只会压缩立绘区，不会让气泡盖住立绘。 */
   display: flex;
   flex-direction: column;
-  /* 无边框窗口靠这里拖动；交互区域下面单独取消。 */
-  -webkit-app-region: drag;
+  /* 整窗 no-drag：拖拽区会吞掉 pointer 事件（mousemove 也收不到），
+     指针从气泡移进任何一块透明区时，渲染层都拿不到移动事件，
+     窗口就会卡在「可点」状态，透明区域点不过去——这是「气泡上面/旁边不能穿透」的根因。
+     移动窗口改由 JS 拖拽承担（按住立绘拖动，见 renderer.mjs 的 dragStart 链路），
+     透明区域全部交给像素级穿透判定，一块都不留拖拽区。 */
+  -webkit-app-region: no-drag;
+  /* 窗口比立绘所需高出这一段（见 dist/windowShell.js 的 BUBBLE_HEADROOM_RESERVE），
+     多出来的部分留给立绘头顶上方的气泡与提问卡。
+     这段由独立的 #headroom 段占位、挡在 flex 之外：#stage-area 的 flex:1 吃不到它，
+     立绘就不会因为窗口变高而被放大，大小和位置都保持原样。
+     气泡是 absolute + bottom 定位，包含块取 #app 的 padding box，底边仍按窗口底部算，
+     这段占位不会把气泡推走。 */
+}
+
+/* 头顶透明余量：固定高度、不参与伸缩；必须 no-drag —— 拖拽区会吞掉 pointer
+   事件（mousemove 也收不到），指针从气泡移进这段透明区时窗口会卡在「可点」
+   状态，头顶的透明区域就穿透不过去了。 */
+#headroom {
+  flex: none;
+  height: var(--bubble-headroom-reserve, 240px);
+  -webkit-app-region: no-drag;
+}
+
+/* 窗口底图：铺在 #app 最底层，不参与 flex 布局，也不抢鼠标。
+   窗口本身是透明的，这一层有图才显示，没图就完全不存在。 */
+#bg-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: none;
+  pointer-events: none;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: 50% 50%;
+  background-size: cover;
+  transition: opacity 0.18s ease;
+}
+
+#bg-layer[data-on="1"] {
+  display: block;
 }
 
 /* 立绘区：flex 里唯一可伸缩的一段。 */
@@ -38,8 +76,10 @@ body {
   min-height: 0;
   overflow: hidden;
   /* 气泡吐字时由渲染层写入实际高度：整个立绘区下移让位，气泡不会压在立绘上。
-     #stage 是 absolute，padding 只缩内容盒、推不动它，所以这里用 margin 让整块挪下去。 */
-  margin-top: var(--bubble-reserve, 0px);
+     #stage 是 absolute，padding 只缩内容盒、推不动它，所以用 border 让整块挪下去。
+     用 margin 会让总高溢出窗口，状态条被挤出可视区、底部被裁；border 参与 flex 计算，
+     立绘区自己缩，状态条就留在窗口里。 */
+  border-top: var(--bubble-reserve, 0px) solid transparent;
 }
 
 /*
@@ -698,4 +738,19 @@ input[type="file"] {
   font-size: 11px;
   line-height: 1.5;
   text-align: center;
+}
+
+/* 单击可见反馈：素材只有 idle、没有 tap 动作，整个立绘区轻轻弹一下代替。
+   transform-origin 在底部中心，先压扁再回弹，像被轻轻按了一下脑袋。
+   动画只有 320ms，头顶位置测量是事件驱动的，撞不上这段位移。 */
+@keyframes pet-tap-bounce {
+  0%   { transform: scale(1, 1) translateY(0); }
+  28%  { transform: scale(1.03, 0.94) translateY(2%); }
+  58%  { transform: scale(0.985, 1.04) translateY(-1.2%); }
+  100% { transform: scale(1, 1) translateY(0); }
+}
+
+#stage-area.tap-bounce {
+  animation: pet-tap-bounce 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: 50% 100%;
 }

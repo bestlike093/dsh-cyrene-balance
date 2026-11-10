@@ -10,8 +10,9 @@
  * 加密由外面注入，封不上就不写盘；读坏了就当空记忆，不挡聊天。
  */
 import fs from 'node:fs/promises'
+import path from 'node:path'
 
-const KINDS = new Set(['preference', 'person', 'project', 'promise', 'lesson'])
+const KINDS = new Set(['preference', 'person', 'project', 'promise', 'lesson', 'knowledge'])
 /**
  * 一条记忆可以被提起的场合：
  * - free：随时可以直说；
@@ -31,7 +32,8 @@ const KIND_LABEL = {
   preference: '你的偏好',
   person: '你身边的人',
   project: '你正在做的事',
-  promise: '你们说好的事'
+  promise: '你们说好的事',
+  knowledge: '学到的知识'
 }
 
 const KIND_WEIGHT = {
@@ -39,6 +41,7 @@ const KIND_WEIGHT = {
   promise: 0.6,
   project: 0.5,
   person: 0.4,
+  knowledge: 0.4,
   preference: 0.3
 }
 
@@ -90,6 +93,18 @@ function clampConfidence(value) {
   return Math.min(1, Math.max(0, number))
 }
 
+/** 兼容时间戳：数字、数字字符串、ISO 日期字符串都能读；读不出才落回兜底值。 */
+function parseTimestamp(value, fallback) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const number = Number(value)
+    if (Number.isFinite(number)) return number
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return fallback
+}
+
 function cleanText(value) {
   if (typeof value !== 'string') return ''
   return value.trim().replace(/\s+/g, ' ').slice(0, MAX_TEXT)
@@ -137,6 +152,8 @@ export function createFactStore(options = {}) {
   let loading = null
   let saveTimer = null
   let writeChain = Promise.resolve(true)
+  /** 上次读取失败且损坏文件无法隔离时置真：禁止写盘，绝不覆盖证据。 */
+  let writesBlocked = false
   /**
    * 最近一轮真正进了提示词的记忆。
    *
@@ -168,7 +185,7 @@ export function createFactStore(options = {}) {
         const plain = await open(sealed)
         const parsed = JSON.parse(new TextDecoder().decode(plain))
         const list = Array.isArray(parsed?.facts) ? parsed.facts : []
-        facts = list
+        const mapped = list
           .filter((item) => item !== null && typeof item === 'object')
           .map((item, index) => ({
             id: typeof item.id === 'string' && item.id !== '' ? item.id : `fact-${index}-${now()}`,
@@ -178,10 +195,14 @@ export function createFactStore(options = {}) {
             createdAt: Number(item.createdAt) || now(),
             lastSeenAt: Number(item.lastSeenAt) || now(),
             lastAccessedAt: Number(item.lastAccessedAt) || 0,
+            // 衰减结算锚点：旧数据没有时按「最后一次被提起」起算，不会重复扣旧账。
+            decayedAt: Number(item.decayedAt) || Number(item.lastSeenAt) || now(),
             archived: item.archived === true,
             // 旧数据没有来源与置信度：按「来自桌面、七成可信」补，不把历史直接丢掉。
             source: typeof item.source === 'string' ? item.source.slice(0, 80) : '',
             confidence: clampConfidence(item.confidence),
+            // 只有模型/导入显式给过置信度才算「确认过」；补出来的默认值不算。
+            confidenceExplicit: Number.isFinite(Number(item.confidence)),
             // 旧数据没有 scope：默认归到桌面这一份，不丢。
             scope: cleanScope(item.scope),
             // 旧数据没有提及策略：按「随时可提」补，行为与以前一致。
@@ -193,11 +214,22 @@ export function createFactStore(options = {}) {
             evidence: cleanText(item.evidence)
           }))
           .filter((item) => item.text !== '')
-          .slice(-limit())
+        if (mapped.length > limit()) {
+          log(`结构化记忆共 ${mapped.length} 条，超过上限 ${limit()}，按写入顺序保留最近 ${limit()} 条`)
+        }
+        facts = mapped.slice(-limit())
         return { ok: true, count: facts.length }
       } catch (error) {
         log('结构化记忆读取失败，按空记忆继续', error)
         facts = []
+        // 读坏的文件先隔离改名：既保留证据，也避免后续写入用空数组覆盖它。
+        try {
+          await fs.rename(filePath, `${filePath}.corrupt-${now()}`)
+          log('损坏的结构化记忆文件已隔离，下次写入另起新文件')
+        } catch (moveError) {
+          writesBlocked = true
+          log('损坏文件无法改名，已禁止写入以避免覆盖证据', moveError)
+        }
         return { ok: false, reason: 'unreadable' }
       } finally {
         loaded = true
@@ -218,6 +250,10 @@ export function createFactStore(options = {}) {
 
   async function flush() {
     if (!available) return false
+    if (writesBlocked) {
+      log('结构化记忆写盘被禁止：上次读取失败且损坏文件无法隔离')
+      return false
+    }
     if (saveTimer !== null) {
       clearTimeout(saveTimer)
       saveTimer = null
@@ -226,7 +262,7 @@ export function createFactStore(options = {}) {
       try {
         const sealed = await seal({ version: 1, facts })
         const temp = `${filePath}.tmp`
-        await fs.mkdir(filePath.replace(/[\\/][^\\/]+$/, ''), { recursive: true })
+        await fs.mkdir(path.dirname(filePath), { recursive: true })
         await fs.writeFile(temp, JSON.stringify(sealed), 'utf8')
         await fs.rename(temp, filePath)
         return true
@@ -250,6 +286,8 @@ export function createFactStore(options = {}) {
       const text = cleanText(item?.text)
       if (text === '') continue
       const confidence = clampConfidence(item?.confidence)
+      const confidenceExplicit =
+        item?.confidence !== undefined && item?.confidence !== null && Number.isFinite(Number(item?.confidence))
       const source = typeof item?.source === 'string' ? item.source.slice(0, 80) : ''
       const mentionPolicy = cleanMention(item?.mentionPolicy)
       // 断言的时间边界与原话证据：没有就留 0 / 空，不强行编一个。
@@ -279,8 +317,13 @@ export function createFactStore(options = {}) {
       if (existing !== undefined) {
         existing.strength = clampStrength(existing.strength + 0.6)
         existing.lastSeenAt = at
-        // 同一件事被再次确认时，取更高的置信度；来源只补空，不覆盖第一次的出处。
-        existing.confidence = Math.max(clampConfidence(existing.confidence), confidence)
+        // 重新被提起等于刚结算过衰减，锚点跟着走，不会把旧账重复扣一遍。
+        existing.decayedAt = at
+        // 同一件事被再次确认时，取模型显式给出的置信度；没给就保持原值，不用默认值抬升。
+        if (confidenceExplicit) {
+          existing.confidence = confidence
+          existing.confidenceExplicit = true
+        }
         if (existing.source === '' && source !== '') existing.source = source
         // 时间边界与证据只补空：第一次记下的那份更接近当时的原话，不被后来的转述盖掉。
         if (existing.validFrom === 0 && validFrom > 0) existing.validFrom = validFrom
@@ -300,9 +343,11 @@ export function createFactStore(options = {}) {
           createdAt: at,
           lastSeenAt: at,
           lastAccessedAt: 0,
+          decayedAt: at,
           archived: false,
           source,
           confidence,
+          confidenceExplicit,
           scope: owner,
           mentionPolicy,
           validFrom,
@@ -324,11 +369,16 @@ export function createFactStore(options = {}) {
   function decay(at = now()) {
     for (const fact of facts) {
       if (fact.archived) continue
-      const days = Math.max(0, (at - fact.lastSeenAt) / 86_400_000)
+      // 只结算「上次结算之后」的新增天数：同一时刻反复调用不重复扣，
+      // 聊得再密也不会让记忆掉得比时间本身更快。
+      const anchor = Number(fact.decayedAt) || Number(fact.lastSeenAt) || at
+      const days = Math.max(0, (at - anchor) / 86_400_000)
+      if (days <= 0) continue
       const lowConfidence = clampConfidence(fact.confidence) < 0.5
       // 每天淡 0.02：五十天左右从满格淡到 0，期间被提起会重新变强。
       // 低置信度的猜测淡得更快，一个月没再被确认就归档，不让它长期占着提示词。
       fact.strength = clampStrength(fact.strength - days * (lowConfidence ? 0.05 : 0.02))
+      fact.decayedAt = at
       if (days >= 30 && lowConfidence && fact.strength < 0.35) fact.archived = true
       else if (days >= DEFAULT_ARCHIVE_DAYS && fact.strength < 0.3) fact.archived = true
     }
@@ -336,10 +386,15 @@ export function createFactStore(options = {}) {
 
   function trim() {
     const cap = limit()
-    if (facts.length <= cap) return
-    // 先丢归档里最弱的，再丢活跃里最弱的。
-    facts.sort((a, b) => Number(a.archived) - Number(b.archived) || a.strength - b.strength)
-    facts = facts.slice(facts.length - cap)
+    const excess = facts.length - cap
+    if (excess <= 0) return
+    // 先丢归档里最弱的，再丢活跃里最弱的；活跃条目永远比归档条目活得久。
+    // 只挑要丢的 id，不动数组物理顺序，设置页的列表顺序不被裁剪惊扰。
+    const ranked = [...facts].sort(
+      (a, b) => Number(a.archived) - Number(b.archived) || a.strength - b.strength
+    )
+    const drop = new Set(ranked.slice(0, excess).map((fact) => fact.id))
+    facts = facts.filter((fact) => !drop.has(fact.id))
   }
 
   /**
@@ -348,6 +403,8 @@ export function createFactStore(options = {}) {
    */
   function rank(query = '', count = 8, at = now(), scope = DEFAULT_SCOPE, context = 'private') {
     const owner = cleanScope(scope)
+    // count 为 0 表示「本轮不想召回」：直接空手而归，不偷偷带回一条。
+    if (count <= 0) return []
     decay(at)
     const q = String(query ?? '')
     const scored = facts
@@ -358,7 +415,11 @@ export function createFactStore(options = {}) {
         const days = Math.max(0, (at - fact.lastSeenAt) / 86_400_000)
         const recency = Math.max(0, 1.5 - days / 30)
         const related = q === '' ? 0 : similarity(q, fact.text) * 2.4
-        const accessed = fact.lastAccessedAt > 0 ? 0.2 : 0
+        // 被召回过会短时加分，两周内随未使用慢慢归零，不搞「召回过一次就永久 +0.2」。
+        const accessedAge = fact.lastAccessedAt > 0
+          ? Math.max(0, Math.min(1, (at - fact.lastAccessedAt) / (14 * 86_400_000)))
+          : 1
+        const accessed = 0.2 * (1 - accessedAge)
         // 低置信度的猜测默认往后排，避免它挤掉更确定的记忆。
         const doubt = clampConfidence(fact.confidence) < 0.5 ? 0.6 : 0
         return {
@@ -373,7 +434,7 @@ export function createFactStore(options = {}) {
         }
       })
       .sort((a, b) => b.score - a.score)
-      .slice(0, Math.max(1, count))
+      .slice(0, Math.max(0, count))
 
     for (const item of scored) item.fact.lastAccessedAt = at
     if (scored.length > 0) scheduleSave()
@@ -403,9 +464,12 @@ export function createFactStore(options = {}) {
       if (!mentionable(fact, context)) return false
       return stillValid(fact, at)
     })
-    // 有原话作证，或者本来就过了半数把握，才算说得出口。
+    // 有原话作证，或模型显式给过半数以上的把握，才算说得出口；
+    // 旧数据补的默认置信度不算「确认过」，没有证据时先进待确认池，不再恒空。
     const readyPool = live.filter(
-      (fact) => fact.evidence !== '' || clampConfidence(fact.confidence) >= 0.5
+      (fact) =>
+        fact.evidence !== '' ||
+        (fact.confidenceExplicit === true && clampConfidence(fact.confidence) >= 0.5)
     )
     const unsurePool = live.filter((fact) => !readyPool.includes(fact))
 
@@ -438,7 +502,8 @@ export function createFactStore(options = {}) {
           })
           .sort((a, b) => b.strength - a.strength || b.lastSeenAt - a.lastSeenAt)
           .slice(0, 3)
-    return { ready, unsure, echo, omitted: live.length - ready.length - unsure.length }
+    // omitted 只统计「free / on_request 里没端出来的」；echo 单独计数，不进 omitted 也不被吞掉。
+    return { ready, unsure, echo, omitted: live.length - ready.length - unsure.length, echoCount: echo.length }
   }
 
   /** 给提示词用：按分类分区，只给还活着的；最近 3 条纠正固定带上。 */
@@ -451,6 +516,8 @@ export function createFactStore(options = {}) {
     const lessons = facts
       .filter((fact) => !fact.archived && fact.kind === 'lesson')
       .filter((fact) => fact.scope === owner || fact.scope === SHARED_SCOPE)
+      // 「只借语气、不给内容」的纠正不能整条写进提示词：与 selectAuthorized 的口径一致。
+      .filter((fact) => cleanMention(fact.mentionPolicy) !== 'soft_echo')
       .filter((fact) => mentionable(fact, context))
       .filter((fact) => stillValid(fact, at))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
@@ -461,9 +528,13 @@ export function createFactStore(options = {}) {
     const unsure = context === 'group' ? [] : selected.unsure
     const echo = selected.echo
     // 记住这一轮端出了什么：对方下一句说「记错了」，才知道该往后退的是哪几条。
-    surfaced = [...merged, ...unsure, ...echo]
-      .map((fact) => ({ id: fact.id, at }))
-      .slice(0, 12)
+    // 按「真的说出口的可能性」排序：ready 在前，纯语气的 echo 最后。
+    surfaced = [
+      ...selected.ready.map((fact) => ({ id: fact.id, at, segment: 'ready' })),
+      ...lessons.map((fact) => ({ id: fact.id, at, segment: 'lesson' })),
+      ...unsure.map((fact) => ({ id: fact.id, at, segment: 'unsure' })),
+      ...echo.map((fact) => ({ id: fact.id, at, segment: 'echo' }))
+    ].slice(0, 12)
     if (merged.length === 0 && unsure.length === 0 && echo.length === 0) return ''
     // 「被问到再说」的条目单独分组：既有背景，又不暗示可以主动开口。
     const groups = new Map()
@@ -495,7 +566,8 @@ export function createFactStore(options = {}) {
   function snapshot(scope = '') {
     const wanted = typeof scope === 'string' ? scope.trim() : ''
     const list = wanted === '' ? facts : facts.filter((fact) => fact.scope === wanted)
-    const byScope = {}
+    // 空原型：scope 名不会被 '__proto__' / 'constructor' 之类的键污染。
+    const byScope = Object.create(null)
     for (const fact of facts) byScope[fact.scope] = (byScope[fact.scope] ?? 0) + 1
     return {
       total: list.length,
@@ -526,8 +598,30 @@ export function createFactStore(options = {}) {
     if (clean === '') return { ok: false, reason: 'empty' }
     fact.text = clean
     fact.lastSeenAt = now()
+    fact.decayedAt = now()
+    // 改完可能和另一条已有记忆几乎一样：主动合并，不留两条重复条目。
+    const dupe = facts.find(
+      (item) =>
+        item.id !== fact.id &&
+        item.archived === false &&
+        item.kind === fact.kind &&
+        item.scope === fact.scope &&
+        similarity(item.text, clean) >= 0.55
+    )
+    let mergedInto = false
+    if (dupe !== undefined) {
+      fact.strength = clampStrength(Math.max(fact.strength, dupe.strength))
+      fact.createdAt = Math.min(fact.createdAt, dupe.createdAt)
+      if (fact.evidence === '' && dupe.evidence !== '') fact.evidence = dupe.evidence
+      if ((MENTION_RANK[cleanMention(dupe.mentionPolicy)] ?? 0) > (MENTION_RANK[cleanMention(fact.mentionPolicy)] ?? 0)) {
+        fact.mentionPolicy = dupe.mentionPolicy
+      }
+      facts = facts.filter((item) => item.id !== dupe.id)
+      mergedInto = true
+      log('编辑记忆后与已有条目重合，已合并', clean.slice(0, 40))
+    }
     scheduleSave()
-    return { ok: true, fact: { ...fact } }
+    return { ok: true, fact: { ...fact }, mergedInto }
   }
 
   /** 把一条事实提到 shared 层（两个渠道都记得），或退回自己的作用域。 */
@@ -549,7 +643,8 @@ export function createFactStore(options = {}) {
     const owner = all ? '' : cleanScope(scope)
     const lines = facts
       .filter((fact) => (includeArchived ? true : !fact.archived))
-      .filter((fact) => all || fact.scope === owner || fact.scope === SHARED_SCOPE)
+      // 指定 scope 时只导这一份；shared 层属于「全部」才一起带出去。
+      .filter((fact) => all || fact.scope === owner)
       .map((fact) =>
         JSON.stringify({
           id: fact.id,
@@ -565,6 +660,7 @@ export function createFactStore(options = {}) {
           strength: fact.strength,
           createdAt: fact.createdAt,
           lastSeenAt: fact.lastSeenAt,
+          decayedAt: fact.decayedAt,
           mentions: fact.mentions,
           archived: fact.archived === true
         })
@@ -606,27 +702,34 @@ export function createFactStore(options = {}) {
         invalid += 1
         continue
       }
-      // 满了就停在当前条，不为了「导完」把已有的记忆挤掉。
-      if (facts.length >= cap && added > 0) break
+      // 满了就停，不为了「导完」把已有的记忆挤掉；在任何一条写入前判断，不超上限。
+      if (facts.length >= cap) break
 
       const id = typeof item.id === 'string' ? item.id.trim() : ''
       if (id !== '' && facts.some((fact) => fact.id === id)) {
         skipped += 1
         continue
       }
+      // 不导入归档时，归档条目整条跳过，而不是把它「复活」成活跃记忆。
+      if (item.archived === true && !includeArchived) {
+        skipped += 1
+        continue
+      }
       const owner =
         typeof item.scope === 'string' && item.scope.trim() !== '' ? cleanScope(item.scope) : fallback
-      const archived = includeArchived && item.archived === true
+      const archived = item.archived === true
       const strength = clampStrength(Number(item.strength))
       const confidence = clampConfidence(item.confidence)
+      const confidenceExplicit = Number.isFinite(Number(item.confidence))
       const source = typeof item.source === 'string' ? item.source.slice(0, 80) : ''
       const mentionPolicy = cleanMention(item.mentionPolicy)
       // 导入的旧文件可能没有这几项：一律按「时间不详、没留证据」补，不影响原有内容。
       const validFrom = Number(item.validFrom) || 0
       const validTo = Number(item.validTo) || 0
       const evidence = cleanText(item.evidence)
-      const createdAt = Number.isFinite(item.createdAt) ? item.createdAt : at
-      const lastSeenAt = Number.isFinite(item.lastSeenAt) ? item.lastSeenAt : at
+      const createdAt = parseTimestamp(item.createdAt, at)
+      const lastSeenAt = parseTimestamp(item.lastSeenAt, at)
+      const decayedAt = parseTimestamp(item.decayedAt, lastSeenAt)
 
       if (!archived) {
         const existing = facts.find(
@@ -639,7 +742,11 @@ export function createFactStore(options = {}) {
         if (existing !== undefined) {
           existing.strength = clampStrength(Math.max(existing.strength, strength))
           existing.lastSeenAt = Math.max(existing.lastSeenAt, lastSeenAt)
-          existing.confidence = Math.max(clampConfidence(existing.confidence), confidence)
+          existing.decayedAt = Math.max(Number(existing.decayedAt) || 0, decayedAt)
+          if (confidenceExplicit) {
+            existing.confidence = confidence
+            existing.confidenceExplicit = true
+          }
           if (existing.source === '' && source !== '') existing.source = source
           if ((MENTION_RANK[mentionPolicy] ?? 0) > (MENTION_RANK[cleanMention(existing.mentionPolicy)] ?? 0)) {
             existing.mentionPolicy = mentionPolicy
@@ -657,9 +764,11 @@ export function createFactStore(options = {}) {
         createdAt,
         lastSeenAt,
         lastAccessedAt: 0,
+        decayedAt,
         archived,
         source,
         confidence,
+        confidenceExplicit,
         scope: owner,
         mentionPolicy,
         validFrom,
@@ -685,13 +794,19 @@ export function createFactStore(options = {}) {
    * 没有指定 id 时取这一轮排在最前面的那条，它最可能正是刚刚说出口的话。
    */
   function noteDenial({ id = '', at = now(), windowMs = 30 * 60 * 1000 } = {}) {
-    const recent = surfaced.filter((item) => at - item.at <= windowMs)
-    const targetId =
-      typeof id === 'string' && id !== ''
-        ? id
-        : recent.length > 0
-          ? recent[0].id
-          : ''
+    // 只认「此刻之前、窗口之内」的端出记录；未来时间戳不算数。
+    const recent = surfaced.filter((item) => item.at <= at && at - item.at <= windowMs)
+    let targetId = ''
+    if (typeof id === 'string' && id !== '') {
+      targetId = id
+    } else if (recent.length > 0) {
+      // 没指定 id 时，优先指向真的说出口的条目（ready），而不是纯语气或待确认的。
+      const SEGMENT_RANK = { ready: 0, lesson: 1, unsure: 2, echo: 3 }
+      const pick = recent
+        .slice()
+        .sort((a, b) => (SEGMENT_RANK[a.segment] ?? 4) - (SEGMENT_RANK[b.segment] ?? 4))[0]
+      targetId = pick?.id ?? ''
+    }
     if (targetId === '') return { ok: false, reason: 'nothing-surfaced' }
     const fact = facts.find((item) => item.id === targetId)
     if (fact === undefined) return { ok: false, reason: 'not-found' }
@@ -725,9 +840,15 @@ export function createFactStore(options = {}) {
   }
 
   async function reset() {
+    const prev = facts
     facts = []
-    await flush()
-    return snapshot()
+    const saved = await flush()
+    if (!saved) {
+      // 写盘失败时把内存回滚，不让「以为清掉了、重启又回来」的假成功发生。
+      facts = prev
+      return { ok: false, reason: 'flush-failed', ...snapshot() }
+    }
+    return { ok: true, ...snapshot() }
   }
 
   return {

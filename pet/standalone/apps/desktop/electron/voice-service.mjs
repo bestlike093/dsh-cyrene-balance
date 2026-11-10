@@ -71,7 +71,7 @@ export function probeTtsEndpoint(endpoint, timeoutMs = 1200) {
  * 这一次请求该不该合成。
  *
  * manual（点小喇叭）只受总开关和免打扰约束；auto 还要看触发时机与最小间隔。
- * 夜间不扰（陪伴页）统管自动朗读：时段内 auto 一律静音；manual 是使用者的明确动作，不拦。
+ * 夜间不扰（陪伴页）统管自动开口：时段内 auto 一律静音；manual 是使用者的明确动作，不拦。
  * 返回 ok:true 时把要念的文本（已按 maxChars 截断）和合成参数一起交出去。
  */
 export function planSpeak({
@@ -120,6 +120,7 @@ export function planSpeak({
     refAudioPath,
     protocol: voice.localProtocol ?? 'gpt-sovits',
     promptLang: voice.promptLang ?? 'zh',
+    promptText: String(voice.promptText ?? ''),
     // 只有自动开口才推进节流时间；manual 不该让下一句自动台词被挡。
     autoSpeakAt: speakReason === 'auto' ? now : null
   }

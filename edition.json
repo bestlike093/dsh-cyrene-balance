@@ -1,9 +1,9 @@
 {
-  "id": "dsh",
-  "label": "DSH 版",
-  "public": true,
-  "redact": true,
-  "live2d": false,
+  "id": "qiqi",
+  "label": "完整版",
+  "public": false,
+  "redact": false,
+  "live2d": true,
   "dataSource": "dsh-session",
-  "note": "DSH 插件包，公开下载即用；不含 Live2D 模型，立绘为默认形象。"
+  "note": "本机自用，保留 Live2D 模型与私人配置；不推公开仓。"
 }

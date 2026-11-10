@@ -1,0 +1,6 @@
+faster-whisper>=1.1.0
+# faster-whisper 1.2.x still passes metadata_errors to av.open; av 19 removed it.
+av>=12,<19
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9

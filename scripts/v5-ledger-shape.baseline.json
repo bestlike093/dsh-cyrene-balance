@@ -1,0 +1,7 @@
+{
+  "maxSub": 74,
+  "subCount": 74,
+  "boundaryExemptMax": 24,
+  "syncedAt": "2026-11-24T14:33:11.319Z",
+  "note": "v5 总账结构闸的末节基线。写完新节跑 node scripts/check-v5-ledger-shape.mjs --sync-baseline 更新；不更新 B2 红。"
+}

@@ -1,0 +1,187 @@
+{
+  "001键鼠手势": {
+    "ParamKey1": 1.0,
+    "ParamKey2": 0.0,
+    "ParamKey3": 0.0,
+    "ParamKey4": 0.0,
+    "ParamKey5": 0.0,
+    "ParamSpecial": 1.0,
+    "ParamSpecial3": 0.0,
+    "ParamKey33": 0.0,
+    "ParamKey34": 0.0
+  },
+  "002捧心": {
+    "ParamKey2": 1.0,
+    "ParamKey1": 0.0,
+    "ParamKey3": 0.0,
+    "ParamKey4": 0.0,
+    "ParamKey5": 0.0
+  },
+  "003要饭": {
+    "ParamKey1": 0.0,
+    "ParamKey2": 0.0,
+    "ParamKey3": 1.0,
+    "ParamKey4": 0.0,
+    "ParamKey5": 0.0
+  },
+  "004喝奶茶": {
+    "ParamKey1": 0.0,
+    "ParamKey2": 0.0,
+    "ParamKey3": 0.0,
+    "ParamKey4": 1.0,
+    "ParamKey5": 0.0
+  },
+  "006黑脸": {
+    "ParamKey6": 1.0
+  },
+  "007高光消失": {
+    "ParamKey7": 1.0
+  },
+  "008爱心眼": {
+    "ParamKey7": 1.0,
+    "ParamKey8": 1.0,
+    "ParamKey13": 0.0,
+    "ParamKey15": 0.0,
+    "ParamKey10": 0.0
+  },
+  "009生气": {
+    "ParamKey9": 1.0,
+    "ParamBrowRY": -1.0,
+    "ParamBrowLY": -1.0
+  },
+  "010晕": {
+    "ParamKey7": 1.0,
+    "ParamKey8": 0.0,
+    "ParamKey10": 1.0,
+    "ParamKey13": 0.0,
+    "ParamKey15": 0.0,
+    "ParamBrowRForm": -1.0,
+    "ParamBrowLForm": -1.0,
+    "MouthPressLipOpen": -1.0
+  },
+  "011》《": {
+    "ParamKey11": 1.0,
+    "ParamKey17": 0.0,
+    "ParamSpecial2": 1.0,
+    "ParamKey12": 0.0
+  },
+  "012O.O": {
+    "ParamKey11": 0.0,
+    "ParamKey12": 1.0,
+    "ParamSpecial2": 1.0,
+    "ParamKey17": 0.0
+  },
+  "013星星眼": {
+    "ParamKey7": 1.0,
+    "ParamKey8": 0.0,
+    "ParamKey10": 0.0,
+    "ParamKey13": 1.0,
+    "ParamKey15": 0.0
+  },
+  "014流泪": {
+    "ParamKey14": 1.0,
+    "ParamBrowRForm": -1.0,
+    "ParamBrowLForm": -1.0
+  },
+  "015泪光": {
+    "ParamKey7": 1.0,
+    "ParamKey8": 0.0,
+    "ParamKey10": 0.0,
+    "ParamKey13": 0.0,
+    "ParamKey15": 1.0,
+    "ParamBrowRForm": -1.0,
+    "ParamBrowLForm": -1.0
+  },
+  "016脸红": {
+    "ParamKey16": 1.0
+  },
+  "017呆呆眼": {
+    "ParamKey11": 0.0,
+    "ParamKey12": 0.0,
+    "ParamKey17": 1.0,
+    "ParamSpecial2": 1.0
+  },
+  "018鼻涕泡": {
+    "ParamKey18": 1.0
+  },
+  "019ZZZ": {
+    "ParamKey19": 1.0,
+    "ParamEyeROpen": -1.0,
+    "ParamEyeLOpen": -1.0,
+    "ParamEyeBallX": 0.0,
+    "ParamEyeBallY": 0.0,
+    "ParamBrowRY": 0.0,
+    "ParamBrowRForm": -0.5939000248908997,
+    "ParamBrowLY": 0.0,
+    "ParamBrowLForm": -0.5939000248908997
+  },
+  "020氛围关闭": {
+    "ParamKey20": 1.0
+  },
+  "021地台": {
+    "ParamKey21": 1.0
+  },
+  "A": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": -30.0,
+    "ParamKeyboardY": -2.2655868530273438,
+    "ParamKeyA": 1.0
+  },
+  "Ctrl": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": 30.0,
+    "ParamKeyboardY": -30.0,
+    "ParamKeyCtrl": 1.0
+  },
+  "D": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": 18.902786254882812,
+    "ParamKeyboardY": -1.3359403610229492,
+    "ParamKeyD": 1.0
+  },
+  "E": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": 22.156538009643555,
+    "ParamKeyboardY": 30.0,
+    "ParamKeyE": 1.0
+  },
+  "F": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": 30.0,
+    "ParamKeyboardY": -0.5612218379974365,
+    "ParamKeyF": 1.0
+  },
+  "Q": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": -30.0,
+    "ParamKeyboardY": 30.0,
+    "ParamKeyQ": 1.0
+  },
+  "R": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": 30.0,
+    "ParamKeyboardY": 30.0,
+    "ParamKeyR": 1.0
+  },
+  "S": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": -10.69094181060791,
+    "ParamKeyboardY": -1.4908862113952637,
+    "ParamKeyS": 1.0
+  },
+  "W": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": -7.747045516967773,
+    "ParamKeyboardY": 30.0,
+    "ParamKeyW": 1.0
+  },
+  "空格": {
+    "ParamMouseChick2": 1.0,
+    "ParamKeyboardX": -11.775482177734375,
+    "ParamKeyboardY": -30.0,
+    "ParamKeySpace": 1.0
+  },
+  "鼠标点击": {
+    "ParamMouseChick": 1.0
+  }
+}

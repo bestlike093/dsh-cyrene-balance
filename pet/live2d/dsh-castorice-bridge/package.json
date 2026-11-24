@@ -1,0 +1,27 @@
+{
+  "name": "dsh-castorice-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "遐蝶桌宠驱动（live2d-driver）的 DSH 端桥：/castorice/say 递话、/castorice/emoji 供表情图、按工作区注入人设。",
+  "type": "module",
+  "main": "lib/index.mjs",
+  "exports": {
+    ".": "./lib/index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "castorice",
+    "live2d",
+    "bridge"
+  ],
+  "license": "MIT"
+}

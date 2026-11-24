@@ -1,0 +1,25 @@
+{
+    "Type": "Live2D Expression",
+    "Parameters": [
+        {
+            "Id": "ParamMouseChick2",
+            "Value": 1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamKeyboardX",
+            "Value": -10.69094181060791,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamKeyboardY",
+            "Value": -1.4908862113952637,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamKeyS",
+            "Value": 1.0,
+            "Blend": "Add"
+        }
+    ]
+}

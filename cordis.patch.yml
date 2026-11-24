@@ -2,9 +2,9 @@
 #
 # 拆分蓝图与里程碑：docs/component-split.md。
 # 通道统一契约：lib/companion/deliver/channel-contract.mjs。
-# 当前主行（dsh-cyrene-pet，即组件蓝图里的 pet-kernel）、pet-memory（M2 已拆出）、
-# pet-voice（M4）与 pet-qq（M3）启用，完整能力都在它们身上；其余七行默认禁用，
-# 每拆完一个域就把对应行打开、并把主文件里的旧实现删除（拆分红线第 47 条）。
+# 当前只有主行（dsh-cyrene-pet，即组件蓝图里的 pet-kernel）启用，
+# 完整能力都在它身上；其余九行默认禁用，每拆完一个域就把对应行打开、
+# 并把主文件里的旧实现删除（拆分红线第 47 条）。
 #
 # 注意：主行的 id / name 保持与 1.0 时代一致，避免已装 profile 出现双行重复挂载。
 - insert:
@@ -12,6 +12,7 @@
       name: dsh-cyrene-pet
     - id: pet-memory
       name: dsh-cyrene-pet/memory
+      disabled: true
     - id: pet-companion
       name: dsh-cyrene-pet/companion
       disabled: true
@@ -23,8 +24,10 @@
       disabled: true
     - id: pet-voice
       name: dsh-cyrene-pet/voice
+      disabled: true
     - id: pet-qq
       name: dsh-cyrene-pet/qq
+      disabled: true
     - id: pet-wechat
       name: dsh-cyrene-pet/wechat
       disabled: true
@@ -33,3 +36,4 @@
       disabled: true
     - id: pet-tools
       name: dsh-cyrene-pet/tools
+      disabled: true

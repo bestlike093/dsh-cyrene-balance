@@ -1,0 +1,12 @@
+{
+  "syncedAt": "2026-11-23T14:09:46.099Z",
+  "count": 1,
+  "exceptions": [
+    {
+      "file": "lib/companion/memory/memory-extract.mjs",
+      "line": 21,
+      "rule": "nickname",
+      "snippet": "qidian.com 上能看到」抽不出 identity"
+    }
+  ]
+}

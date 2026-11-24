@@ -46,7 +46,8 @@ function log(ctx, message) {
 function loadModule() {
   if (!modulePromise) {
     const entry = path.join(__dirname, 'lib', 'index.js')
-    modulePromise = import(pathToFileURL(entry).href).catch((error) => {
+    const cacheBust = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    modulePromise = import(`${pathToFileURL(entry).href}?cyreneReload=${cacheBust}`).catch((error) => {
       modulePromise = null
       record(`load-failed ${error && error.message}`)
       throw error
@@ -58,9 +59,12 @@ function loadModule() {
 /**
  * S0 宿主身份校验（IN-001）。
  *
- * 真的 DeepSeek Harness 进程一定能从以下候选里找到自己的运行时
- * package.json（name 以 @deepseek-ai/dsh 开头）；伪造 webServer /
- * systemPrompt 注入的第三方 Agent 拿不出这份文件，直接拒绝加载。
+ * 真的 DSH 运行时可能以两种形态出现：
+ *   - 独立包：name 以 @deepseek-ai/dsh 开头；
+ *   - 打包在 Cyrene 里：根 package.json 的 name 是 cyrene-agent。
+ *
+ * 两种都必须能从运行时 resources/app.asar 里读到自己的 package.json。
+ * 伪造 webServer / systemPrompt 的第三方 Agent 拿不出这份文件，直接拒绝加载。
  * 校验不通过宁可整插件不生效，也不把人格、记忆、会话权限交给来历不明的宿主。
  */
 function verifyHostIdentity() {
@@ -69,6 +73,13 @@ function verifyHostIdentity() {
     if (typeof file === 'string' && file !== '') candidates.push(file)
   }
   // Electron main：resourcesPath 指向安装目录，旁边就是 app.asar。
+  push(typeof process.resourcesPath === 'string'
+    ? path.join(process.resourcesPath, 'app.asar', 'package.json')
+    : '')
+  push(typeof process.resourcesPath === 'string'
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'package.json')
+    : '')
+  // 兼容 DSH 作为独立子目录打包的旧形态。
   push(typeof process.resourcesPath === 'string'
     ? path.join(process.resourcesPath, 'app.asar', 'dsh', 'package.json')
     : '')
@@ -81,14 +92,14 @@ function verifyHostIdentity() {
     : '')
   // execPath 兜底：app.asar 在可执行文件旁的 resources 里。
   if (typeof process.execPath === 'string' && process.execPath !== '') {
-    push(path.join(path.dirname(process.execPath), 'resources', 'app.asar', 'dsh', 'package.json'))
+    push(path.join(path.dirname(process.execPath), 'resources', 'app.asar', 'package.json'))
   }
 
   for (const file of candidates) {
     try {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
       const name = typeof parsed?.name === 'string' ? parsed.name : ''
-      if (name.startsWith('@deepseek-ai/dsh')) {
+      if (name === 'cyrene-agent' || name.startsWith('@deepseek-ai/dsh')) {
         record(`host-verified ${name}@${typeof parsed?.version === 'string' ? parsed.version : '?'}`)
         return
       }
@@ -122,13 +133,14 @@ const plugin = {
        */
       verifyHostIdentity()
 
-      // 宿主给的 ctx 不是 Cordis 形态（无 effect/on）时，本体 apply 必然抛错；
-      // 这种宿主只提供 webServer/systemPrompt 的原生桥，不是我们的装配入口，
-      // 明确跳过而不是反复 register/unregister。真正的装配走 Cordis 加载器。
-      if (typeof ctx !== 'object' || ctx === null || typeof ctx.effect !== 'function') {
-        record('register-skip ctx 不是 Cordis 形态，本体由 Cordis 加载器装配')
-        applied = false
-        return
+      /*
+       * Cyrene 宿主的 ctx 没有 Cordis 的 effect/on，也没有 webServer；
+       * 本体 apply 顶部会用 host-compat 垫片降级，不能再按 ctx.effect 跳过。
+       * 只有 ctx 完全不是对象时才拒绝。
+       */
+      if (typeof ctx !== 'object' || ctx === null) {
+        record('register-failed ctx 不是对象')
+        throw new Error(`[${ID}] 宿主传入的 ctx 不是对象`)
       }
 
       const mod = await loadModule()

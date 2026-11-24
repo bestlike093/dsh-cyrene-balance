@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>遐蝶 · Live2D 驱动</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  /* body 要自己当定位基准：拖动时把 body 尺寸钉住，绝对定位的输入框才不会跟着窗口往下坠 */
+  body { position: relative; }
+  #stage { position: absolute; inset: 0; cursor: grab; }
+  body.dragging #stage { cursor: grabbing; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* 气泡在头顶：左边贴一张表情，右边是字 */
+  #dialog {
+    position: absolute; left: 50%; top: 6px;
+    max-width: 92%; padding: 8px 12px; border-radius: 12px;
+    background: rgba(22, 17, 34, 0.9);
+    border: 1px solid rgba(185, 160, 255, 0.45);
+    color: #efe9ff; font: 13px/1.6 "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    opacity: 0; transform: translate(-50%, -5px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    pointer-events: none; max-height: 130px; overflow: hidden;
+  }
+  #dialog-emoji {
+    display: none; width: 46px; height: 46px; object-fit: contain; flex: 0 0 auto;
+  }
+  #dialog-emoji.show { display: block; }
+  #dialog-text { white-space: pre-wrap; text-align: center; }
+  /* 等回复时的三个点 */
+  #dialog-typing { display: none; align-items: center; gap: 5px; padding: 2px 4px; }
+  #dialog.typing #dialog-typing { display: inline-flex; }
+  #dialog.typing #dialog-text,
+  #dialog.typing #dialog-emoji { display: none; }
+  #dialog-typing i {
+    width: 6px; height: 6px; border-radius: 50%; background: #efe9ff; opacity: 0.35;
+    animation: dot-bounce 1.2s infinite ease-in-out;
+  }
+  #dialog-typing i:nth-child(2) { animation-delay: 0.18s; }
+  #dialog-typing i:nth-child(3) { animation-delay: 0.36s; }
+  @keyframes dot-bounce {
+    0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-3px); }
+  }
+  #dialog::after {
+    content: ""; position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+    border: 7px solid transparent; border-top-color: rgba(22, 17, 34, 0.9); border-bottom: 0;
+  }
+  #dialog.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* 底部输入框 */
+  #saybar {
+    position: absolute; left: 10px; right: 10px; bottom: 10px;
+    display: flex; gap: 6px; align-items: center;
+    opacity: 0.72; transition: opacity 0.18s ease;
+  }
+  body:hover #saybar, #saybar:focus-within { opacity: 1; }
+  #saybar input {
+    flex: 1; height: 32px; border-radius: 16px; outline: none;
+    border: 1px solid rgba(185, 160, 255, 0.35);
+    background: rgba(20, 16, 32, 0.72); color: #efe9ff;
+    padding: 0 12px; font: 12px/1 "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    user-select: text;
+  }
+  #saybar input:focus { border-color: rgba(185, 160, 255, 0.75); background: rgba(20, 16, 32, 0.92); }
+  #saybar input::placeholder { color: rgba(233, 227, 245, 0.55); }
+  #saybar button {
+    height: 32px; padding: 0 14px; border-radius: 16px; cursor: pointer;
+    border: 1px solid rgba(200, 180, 255, 0.8);
+    background: rgba(126, 98, 210, 0.9); color: #ffffff;
+    font: 12px/1 "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  #saybar button:hover { background: rgba(150, 120, 235, 1); }
+
+  #grip {
+    position: absolute; top: 8px; right: 8px; width: 28px; height: 28px;
+    border-radius: 8px; background: rgba(150, 170, 190, 0.32);
+    color: #fff; font-size: 13px; line-height: 28px; text-align: center;
+    opacity: 0; transition: opacity 0.18s ease; cursor: move;
+    user-select: none;
+  }
+  /* 鼠标离开后至少留五秒，不然手一离开立绘它就淡掉，根本按不到 */
+  #grip.show { opacity: 0.9; }
+  #error {
+    position: absolute; left: 12px; top: 12px; right: 12px; padding: 10px 12px;
+    border-radius: 8px; background: rgba(40, 20, 20, 0.82); color: #ffd9d9;
+    font: 12px/1.5 "Microsoft YaHei", sans-serif; display: none; white-space: pre-wrap;
+  }
+</style>
+<script src="vendor/pixi.min.js"></script>
+<script src="vendor/pixi-unsafe-eval.min.js"></script>
+<script src="vendor/live2dcubismcore.min.js"></script>
+<script src="vendor/live2d-cubism4.min.js"></script>
+</head>
+<body>
+  <div id="stage"><canvas id="canvas"></canvas></div>
+  <div id="dialog"><img id="dialog-emoji" alt=""><span id="dialog-text"></span><span id="dialog-typing"><i></i><i></i><i></i></span></div>
+  <div id="saybar">
+    <input id="say-input" type="text" maxlength="120" placeholder="和她说点什么…（回车发送）">
+    <button id="say-send">说</button>
+  </div>
+  <div id="grip" title="拖动窗口">⠿</div>
+  <div id="error"></div>
+  <script type="module" src="driver.mjs"></script>
+</body>
+</html>

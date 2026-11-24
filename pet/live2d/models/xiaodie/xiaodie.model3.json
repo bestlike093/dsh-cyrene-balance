@@ -1,0 +1,225 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "model.moc3",
+    "Textures": [
+      "texture_0.png"
+    ],
+    "Physics": "model.physics3.json",
+    "DisplayInfo": "model.cdi3.json",
+    "Expressions": [
+      {
+        "Name": "001键鼠手势",
+        "File": "expressions/e001.exp3.json"
+      },
+      {
+        "Name": "002捧心",
+        "File": "expressions/e002.exp3.json"
+      },
+      {
+        "Name": "003要饭",
+        "File": "expressions/e003.exp3.json"
+      },
+      {
+        "Name": "004喝奶茶",
+        "File": "expressions/e004.exp3.json"
+      },
+      {
+        "Name": "006黑脸",
+        "File": "expressions/e006.exp3.json"
+      },
+      {
+        "Name": "007高光消失",
+        "File": "expressions/e007.exp3.json"
+      },
+      {
+        "Name": "008爱心眼",
+        "File": "expressions/e008.exp3.json"
+      },
+      {
+        "Name": "009生气",
+        "File": "expressions/e009.exp3.json"
+      },
+      {
+        "Name": "010晕",
+        "File": "expressions/e010.exp3.json"
+      },
+      {
+        "Name": "011》《",
+        "File": "expressions/e011.exp3.json"
+      },
+      {
+        "Name": "012O.O",
+        "File": "expressions/e012.exp3.json"
+      },
+      {
+        "Name": "013星星眼",
+        "File": "expressions/e013.exp3.json"
+      },
+      {
+        "Name": "014流泪",
+        "File": "expressions/e014.exp3.json"
+      },
+      {
+        "Name": "015泪光",
+        "File": "expressions/e015.exp3.json"
+      },
+      {
+        "Name": "016脸红",
+        "File": "expressions/e016.exp3.json"
+      },
+      {
+        "Name": "017呆呆眼",
+        "File": "expressions/e017.exp3.json"
+      },
+      {
+        "Name": "018鼻涕泡",
+        "File": "expressions/e018.exp3.json"
+      },
+      {
+        "Name": "019ZZZ",
+        "File": "expressions/e019.exp3.json"
+      },
+      {
+        "Name": "020氛围关闭",
+        "File": "expressions/e020.exp3.json"
+      },
+      {
+        "Name": "021地台",
+        "File": "expressions/e021.exp3.json"
+      },
+      {
+        "Name": "A",
+        "File": "expressions/eA.exp3.json"
+      },
+      {
+        "Name": "Ctrl",
+        "File": "expressions/eCtrl.exp3.json"
+      },
+      {
+        "Name": "D",
+        "File": "expressions/eD.exp3.json"
+      },
+      {
+        "Name": "E",
+        "File": "expressions/eE.exp3.json"
+      },
+      {
+        "Name": "F",
+        "File": "expressions/eF.exp3.json"
+      },
+      {
+        "Name": "Q",
+        "File": "expressions/eQ.exp3.json"
+      },
+      {
+        "Name": "R",
+        "File": "expressions/eR.exp3.json"
+      },
+      {
+        "Name": "S",
+        "File": "expressions/eS.exp3.json"
+      },
+      {
+        "Name": "W",
+        "File": "expressions/eW.exp3.json"
+      },
+      {
+        "Name": "空格",
+        "File": "expressions/e空格.exp3.json"
+      },
+      {
+        "Name": "鼠标点击",
+        "File": "expressions/e鼠标点击.exp3.json"
+      }
+    ],
+    "Motions": {
+      "Idle": [
+        {
+          "File": "motions/idle.motion3.json",
+          "FadeInTime": 1.0,
+          "FadeOutTime": 1.0
+        }
+      ],
+      "动作#6": [
+        {
+          "File": "motions/flower.motion3.json",
+          "FadeInTime": 0.6,
+          "FadeOutTime": 0.6
+        },
+        {
+          "File": "motions/butterfly.motion3.json",
+          "FadeInTime": 0.6,
+          "FadeOutTime": 0.6
+        },
+        {
+          "File": "motions/idle.motion3.json",
+          "FadeInTime": 0.8,
+          "FadeOutTime": 0.8
+        }
+      ],
+      "Tick3": [
+        {
+          "File": "motions/idle.motion3.json",
+          "FadeInTime": 1.0,
+          "FadeOutTime": 1.0
+        }
+      ],
+      "小动作": [
+        {
+          "Name": "点头",
+          "File": "motions/nod.motion3.json",
+          "FadeInTime": 0.15,
+          "FadeOutTime": 0.25
+        },
+        {
+          "Name": "摇头",
+          "File": "motions/shake.motion3.json",
+          "FadeInTime": 0.15,
+          "FadeOutTime": 0.25
+        },
+        {
+          "Name": "歪头",
+          "File": "motions/tilt.motion3.json",
+          "FadeInTime": 0.25,
+          "FadeOutTime": 0.3
+        },
+        {
+          "Name": "张望",
+          "File": "motions/look.motion3.json",
+          "FadeInTime": 0.3,
+          "FadeOutTime": 0.3
+        }
+      ],
+      "Sleep": [
+        {
+          "File": "motions/sleep_b.motion3.json",
+          "FadeInTime": 1.0,
+          "FadeOutTime": 1.0
+        },
+        {
+          "File": "motions/sleep_a.motion3.json",
+          "FadeInTime": 1.0,
+          "FadeOutTime": 1.0
+        }
+      ]
+    }
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": [
+        "ParamEyeLOpen",
+        "ParamEyeROpen"
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": [
+        "ParamMouthOpenY"
+      ]
+    }
+  ]
+}

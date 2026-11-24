@@ -1,0 +1,7 @@
+{
+  "name": "castorice-l2d-driver",
+  "version": "0.1.0",
+  "private": true,
+  "description": "遐蝶的 Live2D 桌面驱动：薄壳窗口 + 网页渲染 + 通用模型适配（参考鲸语 jingyu-live2d 的思路，代码自写）",
+  "main": "main.cjs"
+}

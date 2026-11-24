@@ -1,0 +1,40 @@
+{
+    "Type": "Live2D Expression",
+    "Parameters": [
+        {
+            "Id": "ParamKey7",
+            "Value": 1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamKey8",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamKey10",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamKey13",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamKey15",
+            "Value": 1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamBrowRForm",
+            "Value": -1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamBrowLForm",
+            "Value": -1.0,
+            "Blend": "Add"
+        }
+    ]
+}

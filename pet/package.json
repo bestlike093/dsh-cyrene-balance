@@ -1,6 +1,6 @@
 {
   "name": "cyrene-pet",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "author": "bestlike093",
   "main": "standalone/apps/desktop/electron/main.mjs"

@@ -1,6 +1,6 @@
 {
   "name": "dsh-cyrene-pet",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "昔涟桌面桌宠（DeepSeek Harness 版）：Live2D 立绘、透明置顶窗口、拖拽贴边、点击穿透、气泡台词、DeepSeek 余额、系统状态面板、右键菜单，并接管对话提问 / 风险审批 / 任务进程；也可以切成无立绘的卡片模式",
   "type": "module",
   "main": "lib/index.js",
@@ -35,10 +35,17 @@
     "lib",
     "pet",
     "assets",
-    "test",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "!**/.venv",
+    "!**/venv",
+    "!**/__pycache__",
+    "!**/*.pyc",
+    "!**/*.bak",
+    "!**/*.bak-*",
+    "!**/*.orig",
+    "!**/cache_data"
   ],
   "keywords": [
     "dsh",
@@ -54,6 +61,10 @@
     "dsh": ">=0.2.1-rc.1 <0.3.0-0"
   },
   "license": "MIT",
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "check": "node scripts/settings-artifacts.mjs --check && node scripts/source-parity.mjs && node scripts/check-ipc-whitelist.mjs && node scripts/check-ipc-parity.mjs --self-test && node scripts/check-ipc-parity.mjs && node scripts/guard-dist-overwrite.mjs && node scripts/scan-plugin-chain.mjs --self-test && node scripts/scan-plugin-chain.mjs && node scripts/check-staged-clean.mjs --self-test && node scripts/check-staged-clean.mjs && node scripts/check-tracked-coverage.mjs --self-test && node scripts/check-tracked-coverage.mjs && node scripts/check-ledger-structure.mjs --self-test && node scripts/check-ledger-structure.mjs && node scripts/check-merge-landed.mjs && node scripts/check-record-drift.mjs --self-test && node scripts/check-record-drift.mjs && node scripts/inventory-excluded.mjs --self-test && node scripts/inventory-excluded.mjs && node scripts/merge-wake-voice.mjs && node scripts/dist-hash-freeze.mjs && node scripts/assert-no-quarantine-input.mjs && node scripts/check-ship-classification-parity.mjs && node scripts/check-tsconfig-parity.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -85,5 +96,10 @@
   },
   "dependencies": {
     "silk-wasm": "^3.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
   }
 }

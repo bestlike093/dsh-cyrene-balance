@@ -114,6 +114,104 @@ flowchart TB
     S3 --> P2
 ```
 
+### 构筑总览 · 内部模块与算子分层
+
+```mermaid
+flowchart TB
+  subgraph L1[表面：两个展示面]
+    CARD[DSH 设置卡片 client.js<br/>设置总表 105 字段·唯一编辑入口]
+    OBS[观察台六工区 + 气泡/面板<br/>只读投影为主]
+  end
+  subgraph L2[装配层]
+    IDX[index.js + domains/ 九域入口<br/>body·companion·live·memory·proactive·qq·tools·voice·wechat]
+    BR[桥：session-bridge·qq-host<br/>sync-bridge·state-merge]
+  end
+  subgraph L3[陪伴核心 lib/companion 十二域]
+    MEM[memory×20 算子<br/>extract·intent·candidates<br/>search·facts·slots×13]
+    STA[state×16<br/>bond·emotion×4·stage-contract<br/>salience·sealed-store]
+    PER[persona×9<br/>traits·worldbook·speech-habits]
+    SPK[speak×9<br/>proactive·timing·budget·quiet-hours]
+    DLV[deliver×15<br/>qq 通道·remote-decision·group 礼仪]
+    SNS[sense×9 + time×6<br/>presence·agenda·reflection]
+    AST[assets×12 + render×7<br/>sticker 家族·live2d]
+    VOC[voice-out×9<br/>reply-guard·emoji/motion-tag]
+    SYS[system×18<br/>memory-guard·prompt-iron·safe-write·log-redact]
+  end
+  subgraph L4[加密与存储]
+    VLT[lib/vault×24<br/>keyRing·HLC·syncEngine·契约 12 张]
+    DISK[(本机密文域<br/>~/.dsh/storages/cyrene-pet/)]
+  end
+  GATE[审计闸族 check-*×50<br/>权威面 9·发布面 6·其余各域形状闸]
+  EXT[外部：DeepSeek API·QQ 开放平台·DSH 宿主]
+
+  CARD --- IDX
+  OBS --- BR
+  IDX --- L3
+  BR --- IDX
+  L3 --- VLT
+  VLT --- DISK
+  L3 --- EXT
+  GATE -. 每轮 commit 全数复检 .- L3
+  GATE -.- DISK
+```
+
+### 算子深巷 · 一条自述怎么变成记忆
+
+```mermaid
+flowchart LR
+  MSG[一句话进来] --> EX[memory-extract<br/>六句式自述抽取]
+  MSG --> IN[memory-intent<br/>该不该记]
+  EX --> CAND[memory-candidates 候选盒]
+  IN --> CAND
+  CAND --> SCR[scrub 脱敏<br/>owner-guard 权限<br/>memory-guard 落盘前过滤]
+  SCR --> SLOT[memory-slots<br/>13 类归槽]
+  SLOT --> STORE[(memory-store<br/>→ memory.vault 本机密文)]
+  STORE --> SRCH[memory-search<br/>BM25 + embedding 向量]
+  SRCH --> RANK[salience 显著性排序]
+  RANK --> INJ[取前 8 条注入 prompt<br/>固定·常提·最近]
+  STORE --> DEC[retention<br/>普通条目 30 天半衰]
+  DEC -. 自然淡出 .-> STORE
+  UI[手动记一条·固定·忘掉] --> STORE
+  INJ --> FINAL[开口时她记得你]
+```
+
+### 方向图 · 蓝图格子：落了哪些、在走哪些、排着哪些
+
+对应《201 实施单》与《整改蓝本》的真实格子，状态如实：
+
+```mermaid
+flowchart LR
+  subgraph DONE[已落 · v2.0.1 内]
+    M1[M1 六工区记忆整合<br/>编辑权唯一入口 + 六格布局]
+    W1[① 写入口收敛<br/>槽写三层同拆·剩唯一权威]
+    M2[M2 目标配方 + 常用/全部两态]
+    M4[M4 档位来源拆账<br/>T4a 分歧实证 / T4b 销账位]
+    GATE[审计闸族 50 支<br/>导出闸全项 PASS]
+    D2[D2 推版发布]
+  end
+  subgraph DOING[进行中]
+    P1B[P1b 档位证据推移<br/>λ/σ 采集面已开·候真实数据]
+    EYE[签销 · 真机眼<br/>桌宠侧已签·DSH 侧待重启验证]
+    HP[2 件来历不明产物<br/>先查来源再定处置]
+  end
+  subgraph NEXT[排队 · 2.1.0]
+    P0[P0 归并表<br/>群成员 openid 认成人<br/>真群名 · 群友昵称上屏]
+    MIG[① 显示面迁权威档<br/>旧单维表整体退场]
+    P3[P3 名称解析收尾<br/>代号过渡 → 可信昵称]
+    S4[§4 空态引导 + 抽屉]
+    DOOR[门缺两配方建位<br/>手动补记记忆 + 静默时段]
+    TPL[模板应用带 diff 预览]
+    DEP[六格深化<br/>记忆库双视图·人卡详情·布局断言]
+  end
+  FUT[更远 · 长眼睛<br/>反思开档 · 校准拟值 · 自我改进闭环]
+
+  M1 --> MIG
+  M1 --> P3
+  P0 --> DEP
+  P1B --> FUT
+  NEXT ==> FUT
+```
+
 ## 三十秒上手
 
 1. 从 [Releases](https://github.com/bestlike093/dsh-cyrene-balance/releases/latest) 下载最新安装包，解压到任意目录（例如 `D:\plugins\dsh-cyrene-pet`）。Release 页附 SHA-256，可核对完整性。

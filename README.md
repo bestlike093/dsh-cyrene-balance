@@ -15,6 +15,105 @@
 - 她记得你：固定、常提、最近的记忆会带进新会话；日常发言里的自述和偏好也会自动记下。
 - DSH 的提问与审批可以弹在她这里逐题回答，出门在外也能在 QQ 上拍板。
 
+## 项目脉络：三张图
+
+三张图各答一个问题：一条消息进来发生了什么（脉络）、两个进程怎么连在一起（拓扑）、每份数据谁写谁读（关系）。
+
+### 脉络图 · 一次对话在她内部走的路
+
+```mermaid
+sequenceDiagram
+    participant 入口 as 桌面 / DSH会话 / QQ桥 / 识屏
+    participant 归一 as 归一化(text·scope·speaker)
+    participant 写入 as 状态写入层
+    participant 存储 as 本机加密存储
+    participant 召回 as 召回层
+    participant 拼装 as Prompt 拼装
+    participant 模型 as DeepSeek API
+    participant 输出 as 输出层
+    participant 回流 as 回写层
+
+    入口->>归一: 消息 + 来源 scope
+    归一->>写入: 自述/意图/事件分拣
+    写入->>存储: 记忆13槽(memory.vault) · 好感事件(bond) · 身体/念头(body/thoughts)
+    归一->>召回: 本轮上下文
+    存储-->>召回: 固定·常提·最近 ≤8 条注入
+    召回->>拼装: 记忆条 + 好感注 + 身体注 + 陪伴注
+    拼装->>模型: stable 段 + turn 段
+    模型->>输出: 台词 + 表情/贴纸标签
+    输出->>输出: guard 清洗 · 亲密红线过滤
+    输出-->>入口: 气泡/立绘/TTS · QQ 拆分发送
+    输出->>回流: 历史落账 · endTurn 降权
+```
+
+### 拓扑图 · 两个进程与它们之间的线
+
+```mermaid
+flowchart LR
+    subgraph HOST[DSH 宿主进程]
+        LIB[lib/index.js 宿主半<br/>设置·余额·提问·审批·QQ]
+        CARD[client.js 注入<br/>dsh 设置卡片]
+    end
+    subgraph PET[桌宠 Electron 进程]
+        WIN[窗口·立绘·气泡·状态面板]
+        OBSD[观察台六工区]
+    end
+    subgraph FILES["~/.dsh/storages/cyrene-pet/"]
+        LIVE[live.json 4s 宿主→桌宠]
+        CMD[pet-command.json 1.2s 桌宠→宿主]
+        VAULT[(密文区<br/>memory.vault·bond·secret)]
+        STATE[state.json 设置]
+    end
+    RT[runtime/ 运行时副本<br/>junction→活树→runtime 同步]
+    API[DeepSeek API]
+    QQ[QQ 开放平台]
+    TUN[隧道 cloudflared/frp]
+
+    LIB -- HTTP 回环路由 /cyrene-pet/* --> CARD
+    LIB --- LIVE
+    LIVE --- WIN
+    CMD --- LIB
+    VAULT --- LIB
+    STATE --- LIB
+    STATE --- WIN
+    HOST == 拉起+同步代码 ==> RT ==> 代码来源 ==> PET
+    LIB --- API
+    QQ --- TUN --- LIB
+    QQ -. 远程拍板/提问 .- LIB
+```
+
+### 关系图 · 每份数据谁有唯一写权
+
+```mermaid
+flowchart TB
+    subgraph 唯一写入口
+        SET[设置总表·她的记忆<br/>13槽开关·桥接·好感开关]
+        MEMUI[「她记住的事」抽屉<br/>手动记一条·固定·忘掉]
+        CHAT[对话自然通道<br/>自述/意图自动入库]
+        EVT[互动事件流<br/>安慰·接住·共同做事…]
+    end
+    subgraph 数据
+        S1[(state.json)]
+        S2[(memory.vault 13槽)]
+        S3[(bond/opening/body/thoughts)]
+    end
+    subgraph 只读投影
+        P1[DSH 设置卡片]
+        P2[观察台六工区·人卡资料化]
+        P3[记忆台/挂载槽位]
+        P4[气泡·状态面板]
+    end
+    SET --> S1
+    MEMUI --> S2
+    CHAT --> S2
+    EVT --> S3
+    S1 --> P1
+    S1 --> P4
+    S2 --> P2
+    S2 --> P3
+    S3 --> P2
+```
+
 ## 三十秒上手
 
 1. 从 [Releases](https://github.com/bestlike093/dsh-cyrene-balance/releases/latest) 下载最新安装包，解压到任意目录（例如 `D:\plugins\dsh-cyrene-pet`）。Release 页附 SHA-256，可核对完整性。

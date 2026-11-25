@@ -13,7 +13,23 @@ const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
 const ID = 'dsh-cyrene-pet'
-const VERSION = '2.0.0'
+/*
+ * A2-006：插件世代取自装载身份（本目录 package.json 的 version），
+ * 不再在这份入口里另存一份硬编副本 —— 改之前这里是 '2.0.0'，而 package.json 已经是 2.0.1，
+ * 于是插件对宿主自称 2.0.1、marker 每行尾却写 v2.0.0，按 marker 归因世代那条链会记错档。
+ * 读不到包信息时回落 'unknown'：marker 缺世代比世代旧一档更难查。
+ */
+const { generationOf, markerLine } = require('./lib/plugin-generation.mjs')
+
+function readOwnPackage() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+const GENERATION = generationOf(readOwnPackage())
 
 let modulePromise = null
 let activeCtx = null
@@ -27,7 +43,7 @@ function record(line) {
   try {
     const file = markerPath()
     fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.appendFileSync(file, `${new Date().toISOString()} ${line} v${VERSION}\n`, 'utf8')
+    fs.appendFileSync(file, markerLine({ at: new Date(), line, generation: GENERATION }), 'utf8')
   } catch (error) {
     // 痕迹写不了不影响加载
   }
@@ -172,7 +188,7 @@ const plugin = {
 
   // 给宿主外壳与调试用的只读状态，不参与业务
   status() {
-    return { id: ID, version: VERSION, applied, marker: markerPath() }
+    return { id: ID, version: GENERATION, applied, marker: markerPath() }
   },
 }
 

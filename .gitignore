@@ -14,3 +14,6 @@ backup/
 venv/
 __pycache__/
 *.pyc
+
+# T1 批二封存：发布通道实体目录不入仓（Step0 定版，磁盘即真相）
+pack-out/

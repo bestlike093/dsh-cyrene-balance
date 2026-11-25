@@ -1,0 +1,22 @@
+# 文档与素材许可说明 · Licensing of Documentation & Assets
+
+本仓库采用分层许可：
+
+| 内容 | 许可证 | 说明 |
+|---|---|---|
+| 源代码（lib/、pet/、scripts/、index.cjs 等） | Apache License 2.0 | 见 LICENSE |
+| 文档与设计笔记（README、docs/、INSTALL、设计图） | CC BY 4.0 | 见下文与 https://creativecommons.org/licenses/by/4.0/ |
+| 角色立绘、Live2D 模型、表情、音效素材（assets/、pet/assets/） | **不授权** | 归原权利人，见 LICENSE 的「素材例外」段 |
+| 项目名与 Logo | 商标政策 | 见 TRADEMARK.md |
+
+Creative Commons 官方明确不建议将 CC 许可证用于软件，因此代码与文档分属
+不同许可证；引用本仓库内容时请按对应层选择遵守的条款。
+
+## CC BY 4.0（文档层）要点
+
+- 可复制、分发、改编文档内容，**包括商业用途**；
+- 条件：必须署名（作者 bestlike093、注明仓库出处、说明修改与否）——
+  署名是授权成立的前提，不署名即无授权；
+- 不得附加合理限制以限制他人进一步使用。
+
+署名格式范例见 NOTICE 与 CITATION.cff。

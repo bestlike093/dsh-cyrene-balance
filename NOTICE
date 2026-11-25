@@ -1,0 +1,33 @@
+NOTICE: dsh-cyrene-pet
+Copyright 2026 bestlike093 <https://github.com/bestlike093>
+
+This product includes software developed at
+https://github.com/bestlike093/dsh-cyrene-balance
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+────────────────────────────────────────────────────────────
+
+署名格式（推荐）
+
+  > 基于「昔涟桌宠 · dsh-cyrene-pet」，原作者 bestlike093，
+  > Apache-2.0 许可。项目地址：https://github.com/bestlike093/dsh-cyrene-balance
+
+衍生分发时（Apache-2.0 §4(b)(c)(d)）：
+
+1. 修改过的文件需显著注明「改动过」；
+2. 保留本 NOTICE 与 LICENSE 原文；
+3. 本 NOTICE 中的第三方归属条目需一并保留。
+
+────────────────────────────────────────────────────────────
+
+第三方素材与角色声明
+
+「昔涟 / Cyrene」角色形象源自第三方游戏 IP 的同人创作资源
+（上游「Cyrene 10.4.2 昔涟 · 桌面桌宠」包），原角色著作权归其权利人；
+本项目仅对自有编排版立绘与界面素材主张权利，详见 LICENSE「素材例外」
+与 TRADEMARK.md。

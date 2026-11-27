@@ -312,8 +312,10 @@ function startServer() {
         }
         serveFile(res, WEB_ROOT, pathname === '/' ? 'index.html' : pathname.slice(1))
       } catch (error) {
-        res.writeHead(500)
-        res.end(String(error))
+        /* 只回固定文案：路径与调用栈留在本机控制台，别顺着 HTTP 漏给请求方 */
+        console.error('[live2d] 请求处理失败', error)
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('internal-error')
       }
     })
     server.on('error', reject)

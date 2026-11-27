@@ -10,11 +10,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bestlike093/cyrene-pet-core.git"
+    "url": "git+https://github.com/bestlike093/dsh-cyrene-balance.git"
   },
-  "homepage": "https://github.com/bestlike093/cyrene-pet-core#readme",
+  "homepage": "https://github.com/bestlike093/dsh-cyrene-balance#readme",
   "bugs": {
-    "url": "https://github.com/bestlike093/cyrene-pet-core/issues"
+    "url": "https://github.com/bestlike093/dsh-cyrene-balance/issues"
   },
   "exports": {
     ".": "./lib/index.js",

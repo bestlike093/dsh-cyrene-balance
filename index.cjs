@@ -46,10 +46,23 @@ function markerPath() {
   return path.join(base, 'Cyrene', `${ID}.marker`)
 }
 
+function markerFile() {
+  const file = markerPath()
+  try {
+    const dir = path.dirname(file)
+    fs.mkdirSync(dir, { recursive: true })
+    // lstat 不跟随链接：Cyrene 目录若是符号链接/junction，就不再往里写。
+    if (fs.lstatSync(dir).isSymbolicLink()) return null
+    return file
+  } catch {
+    return null
+  }
+}
+
 function record(line) {
   try {
-    const file = markerPath()
-    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const file = markerFile()
+    if (!file) return
     fs.appendFileSync(file, markerLine({ at: new Date(), line, generation: GENERATION }), 'utf8')
   } catch (error) {
     // 痕迹写不了不影响加载

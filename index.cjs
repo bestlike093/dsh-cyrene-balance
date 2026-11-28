@@ -9,6 +9,7 @@
  */
 
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -36,7 +37,13 @@ let activeCtx = null
 let applied = false
 
 function markerPath() {
-  return path.join(process.env.APPDATA || '', 'Cyrene', `${ID}.marker`)
+  // 回退路径也必须是绝对路径，否则 marker 会落进当前工作目录。
+  const appData = process.env.APPDATA
+  const home = os.homedir()
+  const base = appData && path.isAbsolute(appData)
+    ? appData
+    : (path.isAbsolute(home) ? path.join(home, 'AppData', 'Roaming') : os.tmpdir())
+  return path.join(base, 'Cyrene', `${ID}.marker`)
 }
 
 function record(line) {

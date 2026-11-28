@@ -1,0 +1,58 @@
+language: "zh-CN"
+early_access: false
+enable_free_tier: true
+
+tone_instructions: "审查从严：优先指出会导致错误、数据损坏、权限越界或安全风险的问题，再提可维护性建议。"
+
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  poem: false
+  review_status: true
+  review_details: true
+  collapse_walkthrough: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "^main$"
+
+  path_filters:
+    - "!dist/**"
+    - "!**/node_modules/**"
+    - "!**/*.lock"
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+
+  path_instructions:
+    - path: "**/*.{js,cjs,mjs,ts,tsx}"
+      instructions: |
+        - 检查未处理的 Promise rejection、空 catch、吞异常后返回成功状态。
+        - 检查路径拼接与文件写入边界：拒绝 `..`、重解析点、符号链接逃逸。
+        - 检查 child_process 调用是否使用参数数组，避免 shell 注入。
+        - 检查定时器、事件监听、子进程在模块卸载/窗口关闭时是否清理。
+        - 检查硬编码密钥、token、内网地址；敏感值必须走环境变量或本机加密存储。
+        - Electron 场景检查 contextIsolation、nodeIntegration、preload 暴露面。
+    - path: "**/*.ps1"
+      instructions: |
+        - 检查提权边界：需要管理员权限的操作是否显式声明，是否会静默降权。
+        - 路径拼接使用 Join-Path，禁止字符串拼接用户输入。
+        - 计划任务参数必须正确转义；注册失败时返回明确错误。
+        - 空 catch 吞异常、临时文件不清理都要指出。
+    - path: "**/*.{html,htm}"
+      instructions: |
+        - 检查 DOM 注入：网络或状态内容必须转义，禁止直接 innerHTML 拼接。
+        - 检查 postMessage / WebView 消息边界，确认来源与消息结构经过校验。
+    - path: "**/manifest.json"
+      instructions: |
+        - 检查权限声明是否最小化；新增权限必须有明确用途。
+        - 检查版本号与 README 是否一致。
+    - path: "**/package.json"
+      instructions: |
+        - 检查依赖是否有多余或高危版本；脚本命令是否会误删文件。
+        - 检查版本号与 CHANGELOG/README 是否一致。
+
+chat:
+  auto_reply: true

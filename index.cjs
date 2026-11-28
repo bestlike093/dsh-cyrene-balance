@@ -9,6 +9,7 @@
  */
 
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -36,7 +37,9 @@ let activeCtx = null
 let applied = false
 
 function markerPath() {
-  return path.join(process.env.APPDATA || '', 'Cyrene', `${ID}.marker`)
+  // APPDATA 缺失时不能退化成相对路径，否则 marker 会写进当前工作目录。
+  const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+  return path.join(base, 'Cyrene', `${ID}.marker`)
 }
 
 function record(line) {

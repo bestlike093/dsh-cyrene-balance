@@ -37,8 +37,12 @@ let activeCtx = null
 let applied = false
 
 function markerPath() {
-  // APPDATA 缺失时不能退化成相对路径，否则 marker 会写进当前工作目录。
-  const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+  // 回退路径也必须是绝对路径，否则 marker 会落进当前工作目录。
+  const appData = process.env.APPDATA
+  const home = os.homedir()
+  const base = appData && path.isAbsolute(appData)
+    ? appData
+    : (path.isAbsolute(home) ? path.join(home, 'AppData', 'Roaming') : os.tmpdir())
   return path.join(base, 'Cyrene', `${ID}.marker`)
 }
 
